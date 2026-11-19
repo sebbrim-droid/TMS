@@ -495,7 +495,7 @@ R.trip = id => {
         <div class="posmap">${POSROWS.map((r,i) => i===0 ? `<div class="posrow">${r.map(cell).join("")}<span></span><span></span><span></span><span></span></div>` : "").join("")}
           <div class="posrow">${POSROWS[1].map(cell).join("")}<span></span>${POSROWS[2].map(cell).join("")}</div>
           <p class="hint" style="margin:2px 0 0">Top: truck T1–T3. Bottom: trailer upper deck R1–R3 · lower deck R4–R6.${plan&&plan.at?` Planned ${fDT(plan.at)}.`:""}</p></div>
-        <div style="margin-top:12px"><button class="btn pri" data-act="plan" style="width:100%">${plan?"Change the plan":"Plan the load"}</button></div>
+        <div style="margin-top:12px;display:grid;gap:6px"><button class="btn pri" data-act="plan" style="width:100%">${plan?"Change the plan":"Plan the load"}</button>${os.length?`<button class="btn" data-act="pdf" style="width:100%">Download load plan PDF</button>`:""}</div>
       </div>
       <div class="card" style="margin-top:12px">
         <h2 style="margin-bottom:8px">Money</h2>
@@ -516,6 +516,7 @@ R.after_trip = id => {
   m.querySelectorAll('[data-act="edit"]').forEach(b => b.onclick = () => tripForm(id));
   m.querySelectorAll('[data-act="add"]').forEach(b => b.onclick = () => addCars(id));
   m.querySelectorAll('[data-act="plan"]').forEach(b => b.onclick = () => openPlanner(id));
+  m.querySelectorAll('[data-act="pdf"]').forEach(b => b.onclick = () => openPlanner(id, true));
   m.querySelectorAll("[data-hk]").forEach(a => a.onclick = () => { hoPick = {trip:id, stop:a.dataset.hk}; });
   m.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { const o = get("orders",b.dataset.rm); t.orders = t.orders.filter(x=>x!==o.id); put("trips",t,true); delete o.trip; put("orders",o); toast("Removed from trip"); });
   const mv = (i, d) => { const st = tripStops(t); [st[i], st[i+d]] = [st[i+d], st[i]]; t.stops = st; put("trips",t); };
@@ -560,8 +561,8 @@ function addCars(id){
 }
 
 /* ================= load planner (the existing planner, embedded) ================= */
-let planTrip = null, frameReady = false;
-function openPlanner(id){ planTrip = id||null; frameReady = false; if(view==="planner"){ lastView = null; refresh(); } else go("planner"); }
+let planTrip = null, frameReady = false, planPdf = false;
+function openPlanner(id, pdf){ planTrip = id||null; planPdf = !!pdf; frameReady = false; if(view==="planner"){ lastView = null; refresh(); } else go("planner"); }
 R.planner = () => `<div id="pbar"></div><iframe class="planner" id="lpframe" src="planner.html" title="Car load planner"></iframe>`;
 R.plannerBar = () => {
   const t = planTrip && get("trips",planTrip), el = $("pbar"); if(!el) return;
@@ -578,11 +579,13 @@ function sendTrip(reset){
   const truck = get("trucks",t.truck)||{}, keep = {};
   if(!reset) (t.lpCars||[]).forEach(c => { if(c.ord) keep[c.ord] = c; });
   const cars = tripOrders(t).map(o => ({ord:o.id, model:o.model||o.modelText||"", stop:stopNo(t,o), keep: keep[o.id] && keep[o.id].model===o.model ? keep[o.id] : null}));
-  fr.contentWindow.postMessage({type:"lp-load", trip:t.id, name:t.name, profile:truck.profile||"eurolohr200-low", route:t.route||"base", cars}, "*");
+  const extra = [truck.plate ? truckName(t.truck) : "", t.driver ? drvName(t.driver) : ""].filter(Boolean).join(" · ");
+  fr.contentWindow.postMessage({type:"lp-load", trip:t.id, name:t.name, profile:truck.profile||"eurolohr200-low", route:t.route||"base", cars, extra, pdf:planPdf}, "*"); planPdf = false;
 }
 let planWrite = {};
 window.addEventListener("message", e => {
   const fr = $("lpframe"), d = e.data||{}; if(!fr || e.source!==fr.contentWindow) return;
+  if(d.type==="lp-pdf" && d.blob){ saveFile(d.blob, d.name||"load-plan.pdf"); toast("Load plan PDF ready"); return; }
   if(d.type==="lp-ready"){ frameReady = true; if(planTrip) sendTrip(); }
   if(d.type==="lp-plan" && d.tmsTrip && d.tmsTrip===planTrip){
     const t = get("trips",d.tmsTrip); if(!t) return;

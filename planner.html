@@ -147,7 +147,9 @@ details input{width:76px}
 #routeinfo{flex:1 1 420px}
 .banner input{width:80px}
 @media (prefers-reduced-motion:no-preference){.carshape{transition:opacity .2s}}
-body.embedded header>div:first-child,body.embedded section[aria-label="Trip"]{display:none}
+body.embedded header>div:first-child,body.embedded section[aria-label="Trip"] .trip>*:not(#pdfbtn),body.embedded #tripsbox{display:none!important}
+body.embedded section[aria-label="Trip"]{padding:8px 12px;display:flex;justify-content:flex-end}
+body.embedded #pdfbtn{width:auto;flex:none}
 body.embedded .wrap{padding-top:10px}
 </style>
 
@@ -1126,10 +1128,10 @@ function exportPdf(){
     var date = new Date().toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"});
     var blob = buildPdf(jpeg, iw, ih, {
       title: name || "Load plan",
-      sub: L.prof.name + (route.id!=="base" ? " · "+route.name : "") + " · " + date + " · " + Object.keys(placed).length + " / " + (Object.keys(placed).length+left.length) + " cars loaded",
+      sub: L.prof.name + (route.id!=="base" ? " · "+route.name : "") + (state.pdfExtra ? " · "+state.pdfExtra : "") + " · " + date + " · " + Object.keys(placed).length + " / " + (Object.keys(placed).length+left.length) + " cars loaded",
       verdict: v || "Load plan", verdictRgb: rgb, rows: rows, left: left, over: (L.res.overIssues||[])
     });
-    var file = (name || "load-plan").replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").slice(0,60) || "load-plan";
+    var file = (name || "load-plan").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").slice(0,60) || "load-plan";
     savePdf(blob, file + ".pdf");
   });
 }
@@ -1140,6 +1142,7 @@ function plainDownload(blob, name){
   setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
 }
 function savePdf(blob, name){
+  if(EMB){ try{ window.parent.postMessage({type:"lp-pdf", blob:blob, name:name}, "*"); return; }catch(e){} }
   var use = window.claude && typeof window.claude.use === "function" ? window.claude.use("downloads") : null;
   if(!use){ plainDownload(blob, name); return; }
   Promise.resolve(use).then(function(dl){
@@ -1211,7 +1214,9 @@ if(EMB){
       var n = carFromModel(c.model, c.stop, "", c.ski); n.ord = c.ord; if(!n.model){ n.note = c.model; } return n;
     });
     sel = null; moveMsg = ""; planCache = {key:null,res:null};
+    state.pdfExtra = d.extra || "";
     renderProfileSelect(); renderRouteSelect(); renderRouteInfo(); renderSpecs(); renderCars(); render(); renderTrip();
+    if(d.pdf) setTimeout(exportPdf, 300);
   });
   try{ window.parent.postMessage({type:"lp-ready"}, "*"); }catch(e){}
 }
