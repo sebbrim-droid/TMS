@@ -309,11 +309,11 @@ function orderForm(id){
       ${o.modelText && !o.model ? `<p class="note pk span2">Imported as “${esc(o.modelText)}”: pick the matching model so the load planner knows its size.</p>`:""}
       <p class="hint span2" id="carinfo">${info?`Length ${info.len} m · height ${info.h} m · ${info.kg} kg (approximate database specs)`:""}</p>
       ${sel("Customer","customer",[["","No customer"]].concat(list("customers").map(c=>[c.id,c.name])),o.customer)}
-      <label class="f">Price for this car (${S().currency||"EUR"})<input name="price" type="number" step="0.01" min="0" value="${esc(o.price??"")}"><span class="hint" id="pricehow"></span></label>
       ${sel("Pick up at","from",locOpts(),o.from)}
       ${sel("Deliver to","to",locOpts(),o.to)}
       <label class="f">Distance pickup → delivery (km)<input name="km" type="number" min="0" step="1" value="${esc(o.km||(o.from&&o.to?distInfo(o.from,o.to).km:"")||"")}"><span class="hint" id="kmhow"></span></label>
-      <p class="hint" style="align-self:end;margin:0 0 10px">Used for per-km prices. A distance you change is saved for the next car on this lane.</p>
+      <label class="f">Price for this car (${S().currency||"EUR"})<input name="price" type="number" step="0.01" min="0" value="${esc(o.price??"")}"><span class="hint" id="pricehow"></span><span class="hint" id="pricecalc" style="display:block"></span></label>
+      <p class="hint" style="align-self:end;margin:0 0 10px">Used for per-km prices and the price calculator. A distance you change is saved for the next car on this lane.</p>
       ${fld("Ready from","ready",o.ready,"date")}
       ${fld("Deliver by","due",o.due,"date")}
       ${fld("Car value for insurance ("+(S().currency||"EUR")+", optional)","value",o.value,"number",'step="100" min="0"')}
@@ -329,9 +329,14 @@ function orderForm(id){
       f.vin.oninput = vchk; vchk();
       f.model.onchange = () => { const i = CARINFO[f.model.value]; $("carinfo").textContent = i?`Length ${i.len} m · height ${i.h} m · ${i.kg} kg (approximate database specs)`:""; };
       let manual = !!(id && o.price && (()=>{ const p = priceFor(o); return !p || p.price!==+o.price; })());
-      const reprice = () => { const p = priceFor({customer:f.customer.value, from:f.from.value, to:f.to.value, km:+f.km.value});
-        $("pricehow").textContent = manual ? (p && p.price!=null ? `Agreement says ${money(p.price)} (${p.how}). ` : "") + "Set by hand." : p ? p.how : "No price agreement for this customer";
-        if(!manual && p && p.price!=null) f.price.value = p.price; };
+      const reprice = () => { const km = +f.km.value || (f.from.value && f.to.value ? distInfo(f.from.value, f.to.value).km : 0);
+        const p = priceFor({customer:f.customer.value, from:f.from.value, to:f.to.value, km});
+        const q = calcPrice(km), useCalc = !p || p.price==null;
+        $("pricehow").textContent = manual ? (p && p.price!=null ? `Agreement says ${money(p.price)} (${p.how}). ` : "") + "Set by hand." : !useCalc ? p.how : q ? "No price agreement: suggested by the price calculator." : (p ? p.how : "No price agreement and no distance yet.");
+        if(!manual){ if(!useCalc) f.price.value = p.price; else if(q) f.price.value = q.price; }
+        const cur = +f.price.value;
+        $("pricecalc").innerHTML = q ? `Price calculator: <b>${money(q.price)}</b> (cost ${money(q.perCar)} per car with ${q.cars} cars, ${q.empty}% empty km, + ${q.margin}% margin)${cur && cur<q.perCar ? ' <span class="st bad">below your cost</span>' : cur && cur<q.price ? ' <span class="st warn">below target margin</span>' : ""}${cur!==q.price?` <button class="btn sm" type="button" id="usecalc">Use ${money(q.price)}</button>`:""}` : "";
+        const u = $("usecalc"); if(u) u.onclick = () => { f.price.value = q.price; manual = !(p && p.price===q.price) && !useCalc; reprice(); }; };
       f.price.oninput = () => { manual = f.price.value!==""; reprice(); };
       f.customer.onchange = reprice; f.km.oninput = reprice;
       ["from","to"].forEach(k => f[k].onchange = () => { if(f[k].value==="__new"){ f[k].value = ""; locationForm(null, l => { f[k].innerHTML = locOpts().map(x=>opt(x[0],x[1],l.id)).join(""); }); return; } const i = f.from.value && f.to.value ? distInfo(f.from.value, f.to.value) : null; if(i && i.km!=null) f.km.value = i.km; kmHow(); reprice(); });
@@ -419,7 +424,7 @@ function customerForm(id){
     ${fld("Payment terms (days)","terms",c.terms??S().terms??30,"number",'min="0" step="1"')}
     <label class="chk" style="align-self:end"><input type="checkbox" name="fuelClause" ${c.fuelClause!==false?"checked":""}> Fuel surcharge applies (fuel clause)</label>
     <h3 class="span2" style="margin-top:8px">Price agreement</h3>
-    ${sel("How you price this customer","priceMode",[["car","Fixed price per car"],["km","Price per km, per car"]],c.priceMode||"car")}
+    ${sel("How you price this customer","priceMode",[["car","Fixed price per car"],["km","Price per km, per car"],["cost","From the price calculator (your cost + target margin)"]],c.priceMode||"car")}
     <div id="pm-car">${fld("Price per car ("+cur+")","rate",c.rate,"number",'step="0.01" min="0"')}</div>
     <div id="pm-km" class="grid2 span2" style="gap:12px">${fld("Price per km per car ("+cur+")","rateKm",c.rateKm,"number",'step="0.001" min="0"')}${fld("Minimum price per car ("+cur+")","minPrice",c.minPrice,"number",'step="1" min="0"')}</div>
     <div class="span2"><p class="hint" style="margin:0 0 6px">Lane prices override the above for one pickup → delivery pair.</p>
@@ -798,7 +803,7 @@ R.after_handover = id => {
 const FIN_DEF = {
   diesel:{base:1.55, current:1.55, share:30, history:[]},   // fuel clause: surcharge % = (current - base) / base x fuel share of cost
   manualFuel:"",                                            // a fixed surcharge % instead of the diesel formula
-  cost:{roadFactor:1.22, lPer100:32, maintKm:0.11, tollKm:0.17, driverDay:240, fixedMonth:4300, workDays:21, kmDay:650, emptyPct:25},
+  cost:{roadFactor:1.22, lPer100:32, maintKm:0.11, tollKm:0.17, driverDay:240, fixedMonth:4300, workDays:21, kmDay:650, emptyPct:25, carsPerTruck:7},
   distances:{}, target:15
 };
 function F(){ const f = clone(FIN_DEF), s = S().fin||{}; Object.keys(s).forEach(k => { f[k] = (s[k] && typeof s[k]==="object" && !Array.isArray(s[k])) ? Object.assign(f[k]||{}, s[k]) : s[k]; }); return f; }
@@ -815,8 +820,17 @@ function priceFor(o){
   if(lane && +lane.price) return {price:+lane.price, how:"Lane price "+locName(o.from)+" → "+locName(o.to)};
   const km = +o.km || dist(o.from, o.to) || (o.from && o.to ? distInfo(o.from, o.to).km : null);
   if(c.priceMode==="km"){ if(!km) return {price:null, how:"Per-km price: add the distance"}; const p = Math.max(+c.minPrice||0, km*(+c.rateKm||0)); return {price:r2(p), how:`${km} km × ${money(c.rateKm)}/km${+c.minPrice && p===+c.minPrice?" (minimum price)":""}`}; }
+  if(c.priceMode==="cost"){ if(!km) return {price:null, how:"Price calculator: add the distance"}; const q = calcPrice(km); return {price:q.price, how:`Price calculator: cost ${money(q.perCar)} per car + ${q.margin}% margin`}; }
   if(+c.rate) return {price:+c.rate, how:"Fixed price per car"};
   return null;
+}
+// price calculator: cost of the lane per car (incl. empty km back), plus the target margin
+function calcPrice(km, opts){
+  opts = opts||{}; const f = F(), k = costRates(opts.truck||""), cars = Math.max(1, +opts.cars || +f.cost.carsPerTruck || 7);
+  const empty = (opts.empty!=null ? +opts.empty : +f.cost.emptyPct||0)/100, mg = Math.min(90, opts.margin!=null ? +opts.margin : +f.target||0)/100;
+  if(!(+km>0)) return null;
+  const tkm = km*(1+empty), days = Math.max(1, Math.ceil(tkm/(+f.cost.kmDay||650))), total = tkm*k.perKm + days*k.perDay, perCar = total/cars;
+  return {tkm, days, total, perCar, price: Math.ceil(perCar/(1-mg)), cars, empty: Math.round(empty*100), margin: Math.round(mg*100), byOne: total/Math.max(1,cars-1)};
 }
 function surchargeOf(o){ const c = get("customers", o.customer); return c && c.fuelClause===false ? 0 : r2((+o.price||0)*fuelPct()/100); }
 // cost model: what a kilometre and a working day of this truck cost you
@@ -927,11 +941,12 @@ R.finance = () => {
       <label class="f">Deliver to<input id="qt" list="qplaces" placeholder="One of your places, or any town" autocomplete="off"></label>
       <label class="f">Distance (km)<input id="qkm" type="number" min="0" step="1"><span class="hint" id="qkmhow"></span></label>
       <datalist id="qplaces">${list("locations").map(l=>`<option value="${esc(l.name)}">`).join("")}${CITIES.map(c=>`<option value="${esc(c.name)}">${c.cc}</option>`).join("")}</datalist>
-      <label class="f">Cars on the truck<input id="qcars" type="number" min="1" max="10" step="1" value="7"></label>
+      <label class="f">Cars on the truck<input id="qcars" type="number" min="1" max="10" step="1" value="${f.cost.carsPerTruck||7}"></label>
       <label class="f">Empty km back (% of the trip)<input id="qempty" type="number" min="0" max="100" step="5" value="${f.cost.emptyPct}"></label>
       <label class="f">Target margin (%)<input id="qmargin" type="number" min="0" max="90" step="1" value="${f.target}"></label>
     </div>
     <div id="qout" style="margin-top:14px"></div>
+    <div class="tools" style="margin:12px 0 0"><button class="btn" id="qdef">Use cars, empty km and margin for new orders</button><span class="hint">New orders get a suggested price from these settings (now ${f.cost.carsPerTruck||7} cars, ${f.cost.emptyPct}% empty, ${f.target}% margin).</span></div>
   </section>
 
   <section class="card sec"><h2 style="margin-bottom:6px">Distances between places</h2>
@@ -950,13 +965,13 @@ R.after_finance = () => {
     if(+v.current && +v.current!==+f.diesel.current) f.diesel.history = (f.diesel.history||[]).concat([{date:todayISO(), price:+v.current}]).slice(-52);
     f.diesel.current = +v.current||0; f.diesel.base = +v.base||0; f.diesel.share = +v.share||0; f.manualFuel = v.manual; saveFin(f); refresh(); toast("Fuel surcharge now "+fuelPct()+"%"); };
   $("costf").onsubmit = e => { e.preventDefault(); const v = formVals($("costf")), f = F(); Object.keys(v).forEach(k => { if(k==="target") f.target = +v[k]||0; else f.cost[k] = +v[k]||0; }); saveFin(f); refresh(); toast("Costs saved"); };
-  const q = () => { const k = costRates(""), f = F(), km = +$("qkm").value||0, cars = Math.max(1,+$("qcars").value||1), empty = (+$("qempty").value||0)/100, mg = Math.min(90,+$("qmargin").value||0)/100;
-    if(!km){ $("qout").innerHTML = `<p class="hint">Pick both ends, or type the distance.</p>`; return; }
-    const tkm = km*(1+empty), days = Math.max(1, Math.ceil(tkm/(+f.cost.kmDay||650))), total = tkm*k.perKm + days*k.perDay, perCar = total/cars, price = perCar/(1-mg);
+  const q = () => { const km = +$("qkm").value||0, r = calcPrice(km, {cars:$("qcars").value, empty:$("qempty").value, margin:$("qmargin").value});
+    if(!r){ $("qout").innerHTML = `<p class="hint">Pick both ends, or type the distance.</p>`; return; }
+    const {tkm, days, total, perCar, price, cars} = r, mg = r.margin/100;
     $("qout").innerHTML = `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
       <div class="card"><span class="hint">Cost per car</span><div style="font-size:26px;font-weight:800">${money(perCar)}</div><span class="hint">${Math.round(tkm)} km incl. empty · ${days} day${days>1?"s":""} · ${money(total)} per truck</span></div>
-      <div class="card" style="border-color:var(--em)"><span class="hint">Price per car at ${Math.round(mg*100)}% margin</span><div style="font-size:26px;font-weight:800;color:var(--em-deep)">${money(price)}</div><span class="hint">${money(price/km)} per loaded km per car</span></div>
-      <div class="card"><span class="hint">Break-even with 1 car fewer</span><div style="font-size:26px;font-weight:800">${money(total/Math.max(1,cars-1))}</div><span class="hint">if you load ${Math.max(1,cars-1)} instead of ${cars}</span></div></div>`; };
+      <div class="card" style="border-color:var(--em)"><span class="hint">Price per car at ${Math.round(mg*100)}% margin</span><div style="font-size:26px;font-weight:800;color:var(--em-deep)">${money(price)}</div><span class="hint">${money(price/km)} per loaded km per car · rounded up</span></div>
+      <div class="card"><span class="hint">Break-even with 1 car fewer</span><div style="font-size:26px;font-weight:800">${money(r.byOne)}</div><span class="hint">if you load ${Math.max(1,cars-1)} instead of ${cars}</span></div></div>`; };
   // each end: one of your places (saved distance or its town) or any town from the built-in list
   const end = txt => { const t = normTxt(txt); if(!t) return null; const l = list("locations").find(x => normTxt(x.name)===t);
     if(l) return {loc:l.id, name:l.name, pt:coordsOf(l.id)}; const c = matchCity(txt); return c ? {name:c.name, pt:{lat:c.lat, lon:c.lon, how:c.name}} : {name:txt, pt:null}; };
@@ -972,6 +987,7 @@ R.after_finance = () => {
   ["qf","qt"].forEach(id => { $(id).onchange = fillKm; $(id).oninput = () => { if(list("locations").some(l=>l.name===$(id).value) || CITIES.some(c=>c.name===$(id).value)) fillKm(); }; });
   $("qkm").oninput = () => { manual = $("qkm").value!=="" && +$("qkm").value!==expected; how(); q(); };
   ["qcars","qempty","qmargin"].forEach(id => $(id).oninput = q);
+  $("qdef").onclick = () => { const f = F(); f.cost.carsPerTruck = Math.max(1,+$("qcars").value||7); f.cost.emptyPct = +$("qempty").value||0; f.target = +$("qmargin").value||0; saveFin(f); refresh(); toast("New orders now use these settings"); };
   { const ls = list("locations"), pu = ls.find(l => /port|compound|factory/i.test(l.type||"")), dl = ls.find(l => l!==pu && (l.type==="Dealer")); if(pu) $("qf").value = pu.name; if(dl) $("qt").value = dl.name; }
   fillKm();
   $("dadd").onclick = () => { const a = $("df").value, b = $("dt").value, km = +$("dkm").value; if(!a || !b || a===b || !(km>0)){ toast("Pick two different places and a distance"); return; } setDist(a,b,km); refresh(); toast("Distance saved"); };
