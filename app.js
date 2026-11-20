@@ -125,7 +125,7 @@ function confirmBtn(btn, msg, fn){ if(btn.dataset.armed){ fn(); return; } btn.da
 /* ================= router, tabs, search ================= */
 const VIEWS = [
   ["home","Home"],["orders","Orders"],["trips","Trips"],["planner","Load planner"],["handover","Handover"],
-  ["ecmr","eCMR"],["invoices","Invoices"],["fleet","Fleet & drivers"],["customers","Customers & places"],["settings","Settings"]];
+  ["ecmr","eCMR"],["invoices","Invoices"],["finance","Finance"],["fleet","Fleet & drivers"],["customers","Customers & places"],["settings","Settings"]];
 const R = {}; // view renderers
 let view = "home", param = "";
 function parseHash(){ const h = (location.hash||"#home").slice(1); const m = h.match(/^(trip|handover)-([a-z0-9]+)$/i); if(m){ view = m[1]==="trip"?"trip":"handover"; param = m[2]; } else { view = VIEWS.some(v=>v[0]===h) ? h : "home"; param = ""; } }
@@ -186,6 +186,7 @@ const ICON = {
   invoices:'<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z M9 8h6 M9 12h6"/>',
   fleet:'<path d="M2 16V8h12v8 M14 11h4l3 3v2h-7 M6 18a2 2 0 1 0 0 .1 M17 18a2 2 0 1 0 0 .1 M5 5h7"/>',
   customers:'<path d="M12 21s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11z M12 10a2 2 0 1 0 0 .1"/>',
+  finance:'<path d="M4 20V10 M10 20V4 M16 20v-7 M22 20H2"/>',
   settings:'<path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M12 2v3 M12 19v3 M2 12h3 M19 12h3 M4.9 4.9l2.1 2.1 M17 17l2.1 2.1 M4.9 19.1L7 17 M17 7l2.1-2.1"/>'};
 const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]||""}</svg>`;
 R.home = () => {
@@ -211,6 +212,8 @@ R.home = () => {
       <button class="kpi" data-go="orders:rel"><b>${c.rel}</b><span>Ready to plan</span></button>
       <button class="kpi" data-go="orders:load"><b>${os.filter(o=>oStatus(o)==="load").length}</b><span>Cars on trucks</span></button>
       <button class="kpi" data-go="invoices"><b>${money(unbilled).replace(/\.00$/,"")}</b><span>Delivered, not invoiced</span></button>
+      ${(()=>{ const mt = list("trips").filter(t=>t.date && t.date.slice(0,7)===todayISO().slice(0,7) && +t.km && tripOrders(t).length).map(tripMoney); const mg = sum(mt,x=>x.margin), rv = sum(mt,x=>x.rev);
+        return `<button class="kpi ${mg<0?"pk":""}" data-go="finance"><b>${money(mg).replace(/\.00$/,"")}</b><span>Margin this month${rv?" · "+(mg/rv*100).toFixed(0)+"%":""}</span></button>`; })()}
       <button class="kpi ${c.over?"pk":""}" data-go="invoices"><b>${money(open).replace(/\.00$/,"")}</b><span>Unpaid${c.over?` · ${c.over} overdue`:""}</span></button>
     </div>
   </section>
@@ -221,7 +224,7 @@ R.home = () => {
     <div><h2>Trips today and on the road</h2>${tripCards(trips.filter(t => t.date===todayISO() || tStatus(t)[0]==="On the road").slice(0,4), true) || `<div class="empty">No trips today. <a href="#trips">See all trips</a></div>`}</div>
   </div>
   <section class="sec"><h2>Modules</h2><div class="tiles">
-    ${[["orders","Orders","Every car by VIN, from release to invoice"],["trips","Trips","Group cars on a truck, set stops and driver"],["planner","Load planner","Which car goes where on the truck"],["handover","Handover","Photos, damage and signature at pickup and delivery"],["ecmr","eCMR","Consignment notes made from the handovers"],["invoices","Invoices","Bill delivered cars with proof attached"],["fleet","Fleet & drivers","Trucks, trailers, documents and expiry dates"],["customers","Customers & places","Customers, prices, compounds and dealers"],["settings","Settings","Company details, backup and demo data"]]
+    ${[["orders","Orders","Every car by VIN, from release to invoice"],["trips","Trips","Group cars on a truck, set stops and driver"],["planner","Load planner","Which car goes where on the truck"],["handover","Handover","Photos, damage and signature at pickup and delivery"],["ecmr","eCMR","Consignment notes made from the handovers"],["invoices","Invoices","Bill delivered cars with proof attached"],["finance","Finance","Per-km prices, fuel surcharge, costs and margin"],["fleet","Fleet & drivers","Trucks, trailers, documents and expiry dates"],["customers","Customers & places","Customers, prices, compounds and dealers"],["settings","Settings","Company details, backup and demo data"]]
       .map(t => `<a class="tile" href="#${t[0]}">${icon(t[0])}<div><b>${t[1]}</b><span>${t[2]}</span></div></a>`).join("")}
   </div></section>`;
 };
@@ -301,9 +304,11 @@ function orderForm(id){
       ${o.modelText && !o.model ? `<p class="note pk span2">Imported as “${esc(o.modelText)}”: pick the matching model so the load planner knows its size.</p>`:""}
       <p class="hint span2" id="carinfo">${info?`Length ${info.len} m · height ${info.h} m · ${info.kg} kg (approximate database specs)`:""}</p>
       ${sel("Customer","customer",[["","No customer"]].concat(list("customers").map(c=>[c.id,c.name])),o.customer)}
-      ${fld("Price for this car ("+(S().currency||"EUR")+")","price",o.price??((get("customers",o.customer)||{}).rate||""),"number",'step="0.01" min="0"')}
+      <label class="f">Price for this car (${S().currency||"EUR"})<input name="price" type="number" step="0.01" min="0" value="${esc(o.price??"")}"><span class="hint" id="pricehow"></span></label>
       ${sel("Pick up at","from",locOpts(),o.from)}
       ${sel("Deliver to","to",locOpts(),o.to)}
+      ${fld("Distance pickup → delivery (km)","km",o.km||dist(o.from,o.to)||"","number",'min="0" step="1"')}
+      <p class="hint" style="align-self:end;margin:0 0 10px">Used for per-km prices. Saved for the next car on this lane.</p>
       ${fld("Ready from","ready",o.ready,"date")}
       ${fld("Deliver by","due",o.due,"date")}
       ${fld("Car value for insurance ("+(S().currency||"EUR")+", optional)","value",o.value,"number",'step="100" min="0"')}
@@ -318,12 +323,19 @@ function orderForm(id){
       const vchk = () => { const v = f.vin.value.toUpperCase(); $("vinmsg").textContent = !v ? "" : vinOK(v) ? "✓ Looks like a valid VIN" : v.length!==17 ? `${v.length} of 17 characters` : "VINs never use I, O or Q: check it"; };
       f.vin.oninput = vchk; vchk();
       f.model.onchange = () => { const i = CARINFO[f.model.value]; $("carinfo").textContent = i?`Length ${i.len} m · height ${i.h} m · ${i.kg} kg (approximate database specs)`:""; };
-      f.customer.onchange = () => { const c = get("customers",f.customer.value); if(c && c.rate && !f.price.value) f.price.value = c.rate; };
-      ["from","to"].forEach(k => f[k].onchange = () => { if(f[k].value==="__new"){ f[k].value = ""; locationForm(null, l => { f[k].innerHTML = locOpts().map(x=>opt(x[0],x[1],l.id)).join(""); }); } });
+      let manual = !!(id && o.price && (()=>{ const p = priceFor(o); return !p || p.price!==+o.price; })());
+      const reprice = () => { const p = priceFor({customer:f.customer.value, from:f.from.value, to:f.to.value, km:+f.km.value});
+        $("pricehow").textContent = manual ? (p && p.price!=null ? `Agreement says ${money(p.price)} (${p.how}). ` : "") + "Set by hand." : p ? p.how : "No price agreement for this customer";
+        if(!manual && p && p.price!=null) f.price.value = p.price; };
+      f.price.oninput = () => { manual = f.price.value!==""; reprice(); };
+      f.customer.onchange = reprice; f.km.oninput = reprice;
+      ["from","to"].forEach(k => f[k].onchange = () => { if(f[k].value==="__new"){ f[k].value = ""; locationForm(null, l => { f[k].innerHTML = locOpts().map(x=>opt(x[0],x[1],l.id)).join(""); }); return; } const d = dist(f.from.value, f.to.value); if(d!=null) f.km.value = d; reprice(); });
+      reprice();
       $("osave").onclick = () => {
         const v = formVals(f); delete v.brand;
         if(!v.vin && !v.ref){ toast("Add a VIN or a reference"); return; }
-        Object.assign(o, v, {vin:v.vin.toUpperCase(), price:+v.price||0, value:+v.value||0});
+        Object.assign(o, v, {vin:v.vin.toUpperCase(), price:+v.price||0, value:+v.value||0, km:+v.km||0});
+        if(o.km && o.from && o.to && dist(o.from,o.to)==null) setDist(o.from, o.to, o.km);
         if(v.model) delete o.modelText;
         if(o.released && !o.releasedAt) o.releasedAt = Date.now();
         if(!o.created) o.created = Date.now();
@@ -350,7 +362,8 @@ function importOrders(){
           const cust = byName("customers", r[2], {terms:S().terms||30});
           put("orders", {vin:(r[0]||"").toUpperCase(), model:m, modelText:m?undefined:r[1], customer:cust, from:byName("locations",r[3],{type:"Compound"}), to:byName("locations",r[4],{type:"Dealer"}),
             ready:/^\d{4}-\d\d-\d\d$/.test(r[5]||"")?r[5]:todayISO(), due:/^\d{4}-\d\d-\d\d$/.test(r[6]||"")?r[6]:addDays(todayISO(),5),
-            price:parseFloat(String(r[7]||"").replace(",", "."))||((get("customers",cust)||{}).rate||0), released:$("imprel").checked, releasedAt:$("imprel").checked?Date.now():null, created:Date.now()}, true); });
+            price:0, priceIn:parseFloat(String(r[7]||"").replace(",", ".")), released:$("imprel").checked, releasedAt:$("imprel").checked?Date.now():null, created:Date.now()}, true); });
+        list("orders").filter(o => "priceIn" in o).forEach(o => { const p = priceFor(o); o.price = o.priceIn || (p && p.price) || 0; delete o.priceIn; put("orders",o,true); });
         closeModal(); refresh(); toast(`${rows.length} orders imported`);
       };
     });
@@ -361,8 +374,8 @@ R.customers = () => {
   const cs = list("customers").sort((a,b)=>a.name.localeCompare(b.name)), ls = list("locations").sort((a,b)=>a.name.localeCompare(b.name));
   return `<div class="head"><div><h1>Customers & places</h1><p>Who pays, and the ports, compounds and dealers you drive between.</p></div></div>
   <section><div class="tools"><h2 style="margin-right:auto">Customers</h2><button class="btn pri" data-act="nc">+ Customer</button></div>
-  ${cs.length ? `<div class="tw"><table class="stack"><thead><tr><th>Name</th><th>Country</th><th>VAT number</th><th class="num">Price per car</th><th class="num">Payment terms</th><th class="num">Open orders</th></tr></thead><tbody>
-  ${cs.map(c=>`<tr class="click" data-c="${c.id}"><td><b>${esc(c.name)}</b></td><td>${esc(c.country||"")}</td><td>${esc(c.vat||"")}</td><td class="num">${c.rate?money(c.rate):""}</td><td class="num">${c.terms||S().terms||30} days</td><td class="num">${list("orders").filter(o=>o.customer===c.id && !o.invoice).length}</td></tr>`).join("")}
+  ${cs.length ? `<div class="tw"><table class="stack"><thead><tr><th>Name</th><th>Country</th><th>VAT number</th><th>Pricing</th><th class="num">Payment terms</th><th class="num">Open orders</th></tr></thead><tbody>
+  ${cs.map(c=>`<tr class="click" data-c="${c.id}"><td><b>${esc(c.name)}</b></td><td>${esc(c.country||"")}</td><td>${esc(c.vat||"")}</td><td>${esc(priceDesc(c))}${(c.lanes||[]).length?` <span class="hint">+ ${c.lanes.length} lane price${c.lanes.length>1?"s":""}</span>`:""}${c.fuelClause===false?' <span class="tag">no fuel clause</span>':""}</td><td class="num">${c.terms||S().terms||30} days</td><td class="num">${list("orders").filter(o=>o.customer===c.id && !o.invoice).length}</td></tr>`).join("")}
   </tbody></table></div>` : `<div class="empty">No customers yet.</div>`}</section>
   <section class="sec"><div class="tools"><h2 style="margin-right:auto">Places</h2><button class="btn pri" data-act="nl">+ Place</button></div>
   ${ls.length ? `<div class="tw"><table class="stack"><thead><tr><th>Name</th><th>Type</th><th>Address</th><th>Country</th><th>Opening hours</th></tr></thead><tbody>
@@ -381,15 +394,46 @@ function simpleForm(title, col, id, fieldsHtml, defaults, after){
   openModal(title, `<form id="sf" class="grid2" autocomplete="off">${fieldsHtml(o)}</form>`,
     `${id?`<button class="btn danger left" id="sdel">Delete</button>`:""}<button class="btn" data-close>Cancel</button><button class="btn pri" id="ssave">Save</button>`,
     root => {
-      $("ssave").onclick = () => { const v = formVals(root.querySelector("#sf")); if(!v.name && !v.plate){ toast("Give it a name"); return; } Object.assign(o, v); ["rate","terms","insurance"].forEach(k => { if(k in v) o[k] = +v[k]||0; }); const saved = put(col, o); closeModal(); toast("Saved"); if(after) after(saved); };
+      $("ssave").onclick = () => { const v = formVals(root.querySelector("#sf")); if(!v.name && !v.plate){ toast("Give it a name"); return; } Object.assign(o, v); ["rate","terms","insurance","lPer100","fixedMonth"].forEach(k => { if(k in v) o[k] = +v[k]||0; }); const saved = put(col, o); closeModal(); toast("Saved"); if(after) after(saved); };
       const d = $("sdel"); if(d) d.onclick = () => confirmBtn(d, "Sure? Tap again", () => { del(col, id); closeModal(); toast("Deleted"); });
     });
 }
-function customerForm(id){ simpleForm(id?"Customer":"New customer","customers",id, c => `
-  ${fld("Company name","name",c.name)}${fld("Country","country",c.country)}
-  <label class="f span2">Address<textarea name="address" style="min-height:60px">${esc(c.address||"")}</textarea></label>
-  ${fld("VAT number","vat",c.vat)}${fld("Invoice email","email",c.email,"email")}
-  ${fld("Default price per car ("+(S().currency||"EUR")+")","rate",c.rate,"number",'step="0.01" min="0"')}${fld("Payment terms (days)","terms",c.terms??S().terms??30,"number",'min="0" step="1"')}`, {terms:S().terms||30}); }
+function customerForm(id){
+  const c = id ? clone(get("customers",id)) : {terms:S().terms||30, priceMode:"car", fuelClause:true, lanes:[]};
+  if(id && !c) return; c.lanes = c.lanes||[];
+  const cur = S().currency||"EUR", lo = locOpts().filter(x=>x[0]!=="__new");
+  const lanesHtml = () => c.lanes.map((l,i) => `<tr><td><select class="inp" data-ln="${i}|from">${lo.map(x=>opt(x[0],x[1],l.from)).join("")}</select></td><td><select class="inp" data-ln="${i}|to">${lo.map(x=>opt(x[0],x[1],l.to)).join("")}</select></td><td style="width:120px"><input class="inp" type="number" step="0.01" min="0" data-ln="${i}|price" value="${esc(l.price??"")}"></td><td><button class="btn sm" type="button" data-rmln="${i}" aria-label="Remove lane">×</button></td></tr>`).join("") || `<tr><td colspan="4" class="hint">No lane prices. Add one for lanes you price separately.</td></tr>`;
+  openModal(id?"Customer":"New customer", `<form id="sf" class="grid2" autocomplete="off">
+    ${fld("Company name","name",c.name)}${fld("Country","country",c.country)}
+    <label class="f span2">Address<textarea name="address" style="min-height:60px">${esc(c.address||"")}</textarea></label>
+    ${fld("VAT number","vat",c.vat)}${fld("Invoice email","email",c.email,"email")}
+    ${fld("Payment terms (days)","terms",c.terms??S().terms??30,"number",'min="0" step="1"')}
+    <label class="chk" style="align-self:end"><input type="checkbox" name="fuelClause" ${c.fuelClause!==false?"checked":""}> Fuel surcharge applies (fuel clause)</label>
+    <h3 class="span2" style="margin-top:8px">Price agreement</h3>
+    ${sel("How you price this customer","priceMode",[["car","Fixed price per car"],["km","Price per km, per car"]],c.priceMode||"car")}
+    <div id="pm-car">${fld("Price per car ("+cur+")","rate",c.rate,"number",'step="0.01" min="0"')}</div>
+    <div id="pm-km" class="grid2 span2" style="gap:12px">${fld("Price per km per car ("+cur+")","rateKm",c.rateKm,"number",'step="0.001" min="0"')}${fld("Minimum price per car ("+cur+")","minPrice",c.minPrice,"number",'step="1" min="0"')}</div>
+    <div class="span2"><p class="hint" style="margin:0 0 6px">Lane prices override the above for one pickup → delivery pair.</p>
+      <div class="tw"><table><thead><tr><th>From</th><th>To</th><th>Price per car</th><th></th></tr></thead><tbody id="lanes">${lanesHtml()}</tbody></table></div>
+      <button class="btn sm" type="button" id="addln" style="margin-top:6px">+ Lane price</button></div>
+  </form>`,
+  `${id?`<button class="btn danger left" id="sdel">Delete</button>`:""}<button class="btn" data-close>Cancel</button><button class="btn pri" id="ssave">Save</button>`,
+  root => {
+    const f = root.querySelector("#sf");
+    const mode = () => { const km = f.priceMode.value==="km"; $("pm-car").hidden = km; $("pm-km").style.display = km ? "" : "none"; };
+    f.priceMode.onchange = mode; mode();
+    const bindLanes = () => { $("lanes").innerHTML = lanesHtml();
+      $("lanes").querySelectorAll("[data-ln]").forEach(el => el.oninput = el.onchange = () => { const [i,k] = el.dataset.ln.split("|"); c.lanes[i][k] = k==="price" ? el.value : el.value; });
+      $("lanes").querySelectorAll("[data-rmln]").forEach(b => b.onclick = () => { c.lanes.splice(+b.dataset.rmln,1); bindLanes(); }); };
+    bindLanes();
+    $("addln").onclick = () => { if(!lo.length){ toast("Add places first"); return; } c.lanes.push({from:lo[0][0], to:(lo[1]||lo[0])[0], price:""}); bindLanes(); };
+    $("ssave").onclick = () => { const v = formVals(f); if(!v.name){ toast("Give it a name"); return; }
+      Object.assign(c, v, {terms:+v.terms||0, rate:+v.rate||0, rateKm:+v.rateKm||0, minPrice:+v.minPrice||0, lanes:c.lanes.filter(l=>l.from && l.to && +l.price>0).map(l=>({from:l.from,to:l.to,price:+l.price}))});
+      put("customers", c); closeModal(); toast("Saved"); };
+    const d = $("sdel"); if(d) d.onclick = () => confirmBtn(d, "Sure? Tap again", () => { del("customers", id); closeModal(); toast("Deleted"); });
+  });
+}
+const priceDesc = c => c.priceMode==="km" ? `${money(c.rateKm)}/km${c.minPrice?" · min "+money(c.minPrice):""}` : c.rate ? money(c.rate)+" per car" : "";
 function locationForm(id, after){ simpleForm(id?"Place":"New place","locations",id, l => `
   ${fld("Name","name",l.name)}${sel("Type","type",["Port","Compound","Factory","Dealer","Private address","Other"].map(x=>[x,x]),l.type||"Dealer")}
   <label class="f span2">Address<textarea name="address" style="min-height:60px">${esc(l.address||"")}</textarea></label>
@@ -422,7 +466,8 @@ function truckForm(id){ simpleForm(id?"Truck":"New truck","trucks",id, t => `
   ${sel("Builder","builder",["Lohr","Kässbohrer","Rolfo","Other"].map(x=>[x,x]),t.builder||"Lohr")}${fld("Model","model",t.model,"text",'placeholder="e.g. Eurolohr 200"')}
   ${sel("Cab","cab",[["low","Low cab"],["high","High cab"]],t.cab||"low")}${sel("Load planner layout","profile",PROFILES,t.profile||"eurolohr200-low")}
   <p class="hint span2">The planner has Lohr Eurolohr 200 layouts so far. For a Kässbohrer or Rolfo, the closest Lohr layout is used until its own is added.</p>
-  ${fld("Next inspection","inspection",t.inspection,"date")}${fld("Cargo insurance limit ("+(S().currency||"EUR")+")","insurance",t.insurance,"number",'step="1000" min="0"')}`, {builder:"Lohr",model:"Eurolohr 200",cab:"low",profile:"eurolohr200-low"}); }
+  ${fld("Next inspection","inspection",t.inspection,"date")}${fld("Cargo insurance limit ("+(S().currency||"EUR")+")","insurance",t.insurance,"number",'step="1000" min="0"')}
+  ${fld("Fuel use L/100 km (empty = default in Finance)","lPer100",t.lPer100||"","number",'step="0.5" min="0"')}${fld("Fixed costs per month (empty = default)","fixedMonth",t.fixedMonth||"","number",'step="50" min="0"')}`, {builder:"Lohr",model:"Eurolohr 200",cab:"low",profile:"eurolohr200-low"}); }
 function driverForm(id){ simpleForm(id?"Driver":"New driver","drivers",id, d => `
   ${fld("Name","name",d.name)}${fld("Phone","phone",d.phone,"tel")}
   ${fld("Languages","langs",d.langs,"text",'placeholder="e.g. PL, EN, DE"')}${fld("Driving licence (CE) expires","licence",d.licence,"date")}
@@ -468,7 +513,6 @@ R.trip = id => {
   const os = tripOrders(t), stops = tripStops(t), s = tStatus(t), truck = get("trucks",t.truck);
   const plan = t.plan || null, fresh = plan && t.planSig===planSig(t);
   const pos = {}; os.forEach(o => { const p = plan && plan.positions && plan.positions[o.id]; if(p) pos[p] = o; });
-  const rev = sum(os,o=>o.price), val = sum(os,o=>o.value);
   const hos = list("handovers").filter(h => h.trip===t.id).sort((a,b)=>a.at-b.at);
   const picked = os.filter(o=>o.loadedAt).length, delivered = os.filter(o=>o.deliveredAt).length;
   const cell = p => { const o = pos[p]; return o ? `<div class="pos full"><b>${p}</b><span class="m">${esc(shortModel(o.model)||o.modelText)}</span><span class="hint">Stop ${stopNo(t,o)}</span></div>` : `<div class="pos${truck && truck.profile==="eurolohr200-high" && p==="T1"?" none":""}"><b>${p}</b><span class="hint">empty</span></div>`; };
@@ -497,16 +541,7 @@ R.trip = id => {
           <p class="hint" style="margin:2px 0 0">Top: truck T1–T3. Bottom: trailer upper deck R1–R3 · lower deck R4–R6.${plan&&plan.at?` Planned ${fDT(plan.at)}.`:""}</p></div>
         <div style="margin-top:12px;display:grid;gap:6px"><button class="btn pri" data-act="plan" style="width:100%">${plan?"Change the plan":"Plan the load"}</button>${os.length?`<button class="btn" data-act="pdf" style="width:100%">Download load plan PDF</button>`:""}</div>
       </div>
-      <div class="card" style="margin-top:12px">
-        <h2 style="margin-bottom:8px">Money</h2>
-        <table><tbody>
-          <tr><td>Revenue</td><td class="num"><b>${money(rev)}</b></td></tr>
-          <tr><td>Distance</td><td class="num">${t.km?t.km+" km":`<button class="btn sm" data-act="edit">Add km</button>`}</td></tr>
-          ${t.km?`<tr><td>Revenue per km</td><td class="num">${money(rev/t.km)}</td></tr><tr><td>Revenue per car</td><td class="num">${os.length?money(rev/os.length):"–"}</td></tr>`:""}
-          ${t.cost?`<tr><td>Trip cost (fuel, tolls, driver)</td><td class="num">${money(t.cost)}</td></tr><tr><td>Margin</td><td class="num"><b>${money(rev-t.cost)}</b></td></tr>`:""}
-          ${val?`<tr><td>Cargo value</td><td class="num">${money(val)}${truck&&truck.insurance&&val>truck.insurance?` <span class="st bad">over insurance ${money(truck.insurance)}</span>`:""}</td></tr>`:""}
-        </tbody></table>
-      </div>
+      <div class="card" style="margin-top:12px">${tripMoneyHtml(t)}</div>
       <p class="hint" style="margin-top:10px">${delivered}/${os.length} delivered. Route rules: ${esc((ROUTES.find(r=>r[0]===(t.route||"base"))||ROUTES[0])[1])}.</p>
     </aside>
   </div>`;
@@ -519,6 +554,7 @@ R.after_trip = id => {
   m.querySelectorAll('[data-act="pdf"]').forEach(b => b.onclick = () => openPlanner(id, true));
   m.querySelectorAll("[data-hk]").forEach(a => a.onclick = () => { hoPick = {trip:id, stop:a.dataset.hk}; });
   m.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { const o = get("orders",b.dataset.rm); t.orders = t.orders.filter(x=>x!==o.id); put("trips",t,true); delete o.trip; put("orders",o); toast("Removed from trip"); });
+  m.querySelectorAll("[data-setkm]").forEach(b => b.onclick = () => { t.km = +b.dataset.setkm; put("trips",t); toast("Distance set"); });
   const mv = (i, d) => { const st = tripStops(t); [st[i], st[i+d]] = [st[i+d], st[i]]; t.stops = st; put("trips",t); };
   m.querySelectorAll("[data-up]").forEach(b => b.onclick = () => mv(+b.dataset.up, -1));
   m.querySelectorAll("[data-down]").forEach(b => b.onclick = () => mv(+b.dataset.down, 1));
@@ -530,11 +566,14 @@ function tripForm(id){
     ${sel("Truck","truck",[["","No truck"]].concat(list("trucks").map(x=>[x.id,truckName(x.id)])),t.truck)}
     ${sel("Driver","driver",[["","No driver"]].concat(list("drivers").map(x=>[x.id,x.name])),t.driver)}
     ${sel("Route rules for the load planner","route",ROUTES,t.route||"base")}
-    ${fld("Distance (km)","km",t.km||"","number",'min="0" step="1"')}
-    ${fld("Trip cost: fuel, tolls, driver ("+(S().currency||"EUR")+")","cost",t.cost||"","number",'min="0" step="1"')}
+    <label class="f">Distance incl. empty km (km)<input name="km" type="number" min="0" step="1" value="${esc(t.km||"")}"><span class="hint">${(()=>{ const r = tripRouteKm(t); return r.km!=null ? "Known distances: "+r.km+" km loaded" : r.missing.length ? "Missing distance: "+r.missing.map(p=>locName(p[0])+" → "+locName(p[1])).join(", ") : ""; })()}</span></label>
+    ${fld("Days (empty = from km, 0.5 for half a day)","days",t.days||"","number",'min="0" step="0.5"')}
+    ${fld("Tolls paid ("+(S().currency||"EUR")+", empty = estimate)","tolls",t.tolls??"","number",'min="0" step="0.01"')}
+    ${fld("Other costs ("+(S().currency||"EUR")+")","otherCost",t.otherCost||"","number",'min="0" step="0.01"')}
+    ${fld("What the other costs are","otherNote",t.otherNote,"text",'placeholder="e.g. ferry, parking, winch hire"')}
   </form>`, `${!tripOrders(t).some(o=>o.loadedAt)?`<button class="btn danger left" id="tdel">Delete trip</button>`:""}<button class="btn" data-close>Cancel</button><button class="btn pri" id="tsave">Save</button>`,
   root => {
-    $("tsave").onclick = () => { const v = formVals(root.querySelector("#tf")); Object.assign(t, v, {km:+v.km||0, cost:+v.cost||0}); put("trips",t); closeModal(); toast("Trip saved"); };
+    $("tsave").onclick = () => { const v = formVals(root.querySelector("#tf")); Object.assign(t, v, {km:+v.km||0, days:+v.days||0, tolls:v.tolls===""?"":+v.tolls, otherCost:+v.otherCost||0}); delete t.cost; put("trips",t); closeModal(); toast("Trip saved"); };
     const d = $("tdel"); if(d) d.onclick = () => confirmBtn(d, "Sure? Tap again", () => { tripOrders(t).forEach(o => { delete o.trip; put("orders",o,true); }); del("trips",t.id,true); closeModal(); go("trips"); toast("Trip deleted, its cars are back in Orders"); });
   });
 }
@@ -744,6 +783,173 @@ R.after_handover = id => {
   };
 };
 
+/* ================= finance: prices per km, fuel surcharge, costs and profit ================= */
+const FIN_DEF = {
+  diesel:{base:1.55, current:1.55, share:30, history:[]},   // fuel clause: surcharge % = (current - base) / base x fuel share of cost
+  manualFuel:"",                                            // a fixed surcharge % instead of the diesel formula
+  cost:{lPer100:32, maintKm:0.11, tollKm:0.17, driverDay:240, fixedMonth:4300, workDays:21, kmDay:650, emptyPct:25},
+  distances:{}, target:15
+};
+function F(){ const f = clone(FIN_DEF), s = S().fin||{}; Object.keys(s).forEach(k => { f[k] = (s[k] && typeof s[k]==="object" && !Array.isArray(s[k])) ? Object.assign(f[k]||{}, s[k]) : s[k]; }); return f; }
+function saveFin(f){ const s = clone(S()); s.fin = f; put("settings", s, true); }
+const r2 = n => Math.round((+n||0)*100)/100;
+function fuelPct(){ const f = F(); if(f.manualFuel!=="" && f.manualFuel!=null) return +f.manualFuel||0; const d = f.diesel; if(!+d.base || !+d.current) return 0; return Math.round((d.current-d.base)/d.base*d.share*100)/100; }
+function fuelText(){ const f = F(), p = fuelPct(); return f.manualFuel!=="" && f.manualFuel!=null ? `Fuel surcharge ${p}%` : `Fuel surcharge ${p}% (diesel ${money(f.diesel.current)}/L vs base ${money(f.diesel.base)}/L, fuel ${f.diesel.share}% of cost)`; }
+function dist(a, b){ if(!a || !b) return null; const d = F().distances; return d[a+"|"+b] ?? d[b+"|"+a] ?? null; }
+function setDist(a, b, km){ if(!a || !b || !(+km>0)) return; const f = F(); if(f.distances[a+"|"+b]===+km) return; f.distances[a+"|"+b] = +km; delete f.distances[b+"|"+a]; saveFin(f); }
+// what this car should cost the customer, from their price agreement
+function priceFor(o){
+  const c = get("customers", o.customer); if(!c) return null;
+  const lane = (c.lanes||[]).find(l => l.from===o.from && l.to===o.to);
+  if(lane && +lane.price) return {price:+lane.price, how:"Lane price "+locName(o.from)+" → "+locName(o.to)};
+  const km = +o.km || dist(o.from, o.to);
+  if(c.priceMode==="km"){ if(!km) return {price:null, how:"Per-km price: add the distance"}; const p = Math.max(+c.minPrice||0, km*(+c.rateKm||0)); return {price:r2(p), how:`${km} km × ${money(c.rateKm)}/km${+c.minPrice && p===+c.minPrice?" (minimum price)":""}`}; }
+  if(+c.rate) return {price:+c.rate, how:"Fixed price per car"};
+  return null;
+}
+function surchargeOf(o){ const c = get("customers", o.customer); return c && c.fuelClause===false ? 0 : r2((+o.price||0)*fuelPct()/100); }
+// cost model: what a kilometre and a working day of this truck cost you
+function costRates(truckId){
+  const f = F(), c = f.cost, t = get("trucks", truckId)||{};
+  const l = +t.lPer100 || +c.lPer100, fixed = +t.fixedMonth || +c.fixedMonth;
+  const fuelKm = l/100*(+f.diesel.current||0);
+  return {fuelKm, tollKm:+c.tollKm, maintKm:+c.maintKm, perKm:fuelKm+(+c.tollKm)+(+c.maintKm), driverDay:+c.driverDay, fixedDay:fixed/(+c.workDays||21), perDay:(+c.driverDay)+fixed/(+c.workDays||21), lPer100:l};
+}
+function tripDays(t){ return +t.days || Math.max(1, Math.ceil((+t.km||0)/(+F().cost.kmDay||650))); }
+function tripCost(t){
+  const k = costRates(t.truck), km = +t.km||0, days = tripDays(t);
+  const parts = [["Fuel", km*k.fuelKm, `${km} km × ${k.lPer100} L/100 km × ${money(F().diesel.current)}/L`],
+    ["Tolls", t.tolls!=null && t.tolls!=="" ? +t.tolls : km*k.tollKm, t.tolls!=null && t.tolls!=="" ? "actual" : `estimate ${money(k.tollKm)}/km`],
+    ["Maintenance & tyres", km*k.maintKm, `${money(k.maintKm)}/km`],
+    ["Driver", days*k.driverDay, `${days} day${days!==1?"s":""} × ${money(k.driverDay)}`],
+    ["Truck fixed costs", days*k.fixedDay, `${days} day${days!==1?"s":""} × ${money(k.fixedDay)}`]];
+  if(+t.otherCost) parts.push(["Other", +t.otherCost, t.otherNote||""]);
+  return {parts, total:sum(parts, p=>p[1]), km, days};
+}
+function tripMoney(t){
+  const os = tripOrders(t), base = sum(os, o=>o.price), fuel = sum(os, surchargeOf), rev = base+fuel, cost = tripCost(t);
+  return {os, base, fuel, rev, cost, margin:rev-cost.total, pct: rev ? (rev-cost.total)/rev*100 : 0};
+}
+function tripRouteKm(t){ // suggested trip distance from the known place-to-place distances: pickup -> stop 1 -> stop 2 ...
+  const os = tripOrders(t); if(!os.length) return {km:null, missing:[]};
+  const pts = [os[0].from].concat(tripStops(t)), missing = []; let km = 0;
+  for(let i=1;i<pts.length;i++){ const d = dist(pts[i-1], pts[i]); if(d==null) missing.push([pts[i-1],pts[i]]); else km += d; }
+  return {km: missing.length ? null : km, missing, pts};
+}
+function tripMoneyHtml(t){
+  const m = tripMoney(t), truck = get("trucks", t.truck), val = sum(m.os, o=>o.value), sug = tripRouteKm(t);
+  return `<h2 style="margin-bottom:8px">Money</h2>
+  <table><tbody>
+    <tr><td>Transport price</td><td class="num">${money(m.base)}</td></tr>
+    ${m.fuel?`<tr><td>Fuel surcharge (${fuelPct()}%)</td><td class="num">${money(m.fuel)}</td></tr>`:""}
+    <tr><td><b>Revenue</b></td><td class="num"><b>${money(m.rev)}</b></td></tr>
+    ${m.cost.km ? m.cost.parts.map(p=>`<tr><td>${esc(p[0])} <span class="hint">${esc(p[2])}</span></td><td class="num">−${money(p[1])}</td></tr>`).join("") + `
+    <tr><td><b>Margin</b></td><td class="num"><b style="color:${m.margin<0?"var(--bad)":"var(--em-deep)"}">${money(m.margin)} · ${m.pct.toFixed(0)}%</b></td></tr>
+    <tr><td>Revenue / cost per km</td><td class="num">${money(m.rev/m.cost.km)} / ${money(m.cost.total/m.cost.km)}</td></tr>
+    <tr><td>Cost per car</td><td class="num">${m.os.length?money(m.cost.total/m.os.length):"–"}</td></tr>`
+    : `<tr><td colspan="2"><span class="hint">Add the distance to see costs and margin.</span> ${sug.km!=null?`<button class="btn sm" data-setkm="${sug.km}">Use ${sug.km} km</button>`:""}<button class="btn sm" data-act="edit">Add km</button></td></tr>`}
+    ${val?`<tr><td>Cargo value</td><td class="num">${money(val)}${truck&&truck.insurance&&val>truck.insurance?` <span class="st bad">over insurance ${money(truck.insurance)}</span>`:""}</td></tr>`:""}
+  </tbody></table>
+  ${m.cost.km && sug.km!=null && sug.km!==m.cost.km ? `<p class="hint" style="margin:8px 0 0">Known distances add up to ${sug.km} km loaded, without the way back. <button class="btn sm" data-setkm="${sug.km}">Use ${sug.km} km</button></p>`:""}`;
+}
+
+/* ----- finance tab ----- */
+let finPeriod = "month";
+const PERIODS = [["month","This month"],["last30","Last 30 days"],["quarter","Last 3 months"],["year","This year"],["all","All time"]];
+function inPeriod(iso){ if(!iso) return false; const T = todayISO(); return finPeriod==="all" ? true : finPeriod==="month" ? iso.slice(0,7)===T.slice(0,7) : finPeriod==="year" ? iso.slice(0,4)===T.slice(0,4) : iso >= addDays(T, finPeriod==="last30"?-30:-91) && iso <= T; }
+function bar(v, max, bad){ const w = max ? Math.max(2, Math.abs(v)/max*100) : 0; return `<div style="height:8px;border-radius:4px;background:var(--soft);min-width:60px"><div style="height:8px;border-radius:4px;width:${w}%;background:${bad?"var(--bad)":"var(--em)"}"></div></div>`; }
+R.finance = () => {
+  const f = F(), k = costRates(""), trips = list("trips").filter(t => inPeriod(t.date) && tripOrders(t).length);
+  const ms = trips.map(t => [t, tripMoney(t)]);
+  const rev = sum(ms, x=>x[1].rev), cost = sum(ms.filter(x=>x[1].cost.km), x=>x[1].cost.total), km = sum(ms, x=>x[1].cost.km), cars = sum(ms, x=>x[1].os.length);
+  const noKm = ms.filter(x => !x[1].cost.km).length;
+  // allocate each trip's cost to its cars by share of revenue, then group
+  const group = keyFn => { const g = {}; ms.forEach(([t,m]) => { if(!m.cost.km) return; m.os.forEach(o => { const r = (+o.price||0)+surchargeOf(o), share = m.rev ? r/m.rev : 1/m.os.length, key = keyFn(o,t);
+      const x = g[key] = g[key]||{rev:0,cost:0,cars:0}; x.rev += r; x.cost += m.cost.total*share; x.cars++; }); }); return Object.entries(g).map(([key,x]) => Object.assign({key, margin:x.rev-x.cost}, x)).sort((a,b)=>b.margin-a.margin); };
+  const tbl = (title, rows, label) => { const mx = Math.max(1, ...rows.map(r=>Math.abs(r.margin)));
+    return `<div><h3 style="margin-bottom:8px">${title}</h3>${rows.length ? `<div class="tw"><table class="stack"><thead><tr><th>${label}</th><th class="num">Cars</th><th class="num">Revenue</th><th class="num">Margin</th><th class="num">%</th><th></th></tr></thead><tbody>
+    ${rows.slice(0,8).map(r=>`<tr><td>${esc(r.key)}</td><td class="num">${r.cars}</td><td class="num">${money(r.rev)}</td><td class="num">${money(r.margin)}</td><td class="num">${r.rev?(r.margin/r.rev*100).toFixed(0):0}%</td><td style="width:22%">${bar(r.margin,mx,r.margin<0)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No trips with a distance in this period.</div>`}</div>`; };
+  const fp = fuelPct(), hist = (f.diesel.history||[]).slice(-6).reverse();
+  return `<div class="head"><div><h1>Finance</h1><p>Prices, fuel surcharge, what a kilometre costs you, and what each trip, customer and lane earns.</p></div>
+    <select class="inp" id="fper" style="max-width:200px">${PERIODS.map(p=>opt(p[0],p[1],finPeriod)).join("")}</select></div>
+  <section class="cover" style="grid-template-columns:minmax(0,1fr)"><div class="kpis">
+    <div class="kpi"><b>${money(rev).replace(/\.00$/,"")}</b><span>Revenue · ${trips.length} trips, ${cars} cars</span></div>
+    <div class="kpi"><b>${money(cost).replace(/\.00$/,"")}</b><span>Costs${noKm?` · ${noKm} trip${noKm>1?"s":""} without km`:""}</span></div>
+    <div class="kpi ${rev-cost<0?"pk":""}"><b>${money(rev-cost).replace(/\.00$/,"")}</b><span>Margin · ${rev?((rev-cost)/rev*100).toFixed(0):0}%</span></div>
+    <div class="kpi"><b>${km?money(rev/km):"–"}</b><span>Revenue per km · ${km.toLocaleString("en-GB")} km</span></div>
+    <div class="kpi"><b>${km?money(cost/km):money(k.perKm+k.perDay/(+f.cost.kmDay||650))}</b><span>Cost per km${km?"":" (from your cost model)"}</span></div>
+  </div></section>
+  <div class="two sec">${tbl("By customer", group(o=>custName(o.customer)), "Customer")}${tbl("By lane", group(o=>locName(o.from)+" → "+locName(o.to)), "Lane")}</div>
+  <div class="two sec">${tbl("By truck", group((o,t)=>truckName(t.truck)), "Truck")}
+    <div><h3 style="margin-bottom:8px">Trips</h3>${ms.length?`<div class="tw"><table class="stack"><thead><tr><th>Trip</th><th class="num">Km</th><th class="num">Revenue</th><th class="num">Margin</th></tr></thead><tbody>
+      ${ms.sort((a,b)=>(b[0].date||"").localeCompare(a[0].date||"")).slice(0,10).map(([t,m])=>`<tr class="click" data-trip="${t.id}"><td>${esc(t.name)} <span class="hint">${fDate(t.date)}</span></td><td class="num">${m.cost.km||'<span class="st warn">add</span>'}</td><td class="num">${money(m.rev)}</td><td class="num">${m.cost.km?`<span style="color:${m.margin<0?"var(--bad)":"inherit"}">${money(m.margin)}</span>`:"–"}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty">No trips in this period.</div>`}</div></div>
+  <p class="hint">Each trip's cost is shared over its cars by their share of the revenue.</p>
+
+  <div class="two sec">
+    <section class="card"><h2 style="margin-bottom:6px">Fuel surcharge</h2>
+      <p class="hint" style="margin-top:0">The usual fuel clause: when diesel moves away from the price in your agreement, the surcharge moves with it, weighted by how much of your cost is fuel. It can go negative when diesel drops. The EU Weekly Oil Bulletin gives a weekly diesel price per country.</p>
+      <div style="font-size:clamp(30px,4vw,44px);font-weight:800;line-height:1.1;color:${fp<0?"var(--bad)":"var(--em-deep)"}">${fp>0?"+":""}${fp}%</div>
+      <p class="hint" style="margin:2px 0 12px">${f.manualFuel!=="" && f.manualFuel!=null ? "Fixed % set by you" : `(${money(f.diesel.current)} − ${money(f.diesel.base)}) ÷ ${money(f.diesel.base)} × ${f.diesel.share}%`}</p>
+      <form id="fuelf" class="grid2">
+        ${fld("Diesel price now (per litre, excl. VAT)","current",f.diesel.current,"number",'step="0.001" min="0"')}${fld("Base price in your agreements","base",f.diesel.base,"number",'step="0.001" min="0"')}
+        ${fld("Fuel share of your cost (%)","share",f.diesel.share,"number",'step="1" min="0" max="100"')}${fld("Or a fixed surcharge % (leave empty to use the formula)","manual",f.manualFuel,"number",'step="0.1"')}
+        <div class="span2"><button class="btn pri" type="submit">Save fuel prices</button></div></form>
+      ${hist.length?`<p class="hint" style="margin:12px 0 4px">Diesel price history</p><ul class="alerts">${hist.map(h=>`<li><span>${fDate(h.date)} ${h.date.slice(0,4)}</span><b>${money(h.price)}/L</b></li>`).join("")}</ul>`:""}
+    </section>
+    <section class="card"><h2 style="margin-bottom:6px">Your costs</h2>
+      <p class="hint" style="margin-top:0">Defaults for every truck. Fuel use and fixed costs can be set per truck under Fleet.</p>
+      <form id="costf" class="grid2">
+        ${fld("Fuel use (L per 100 km)","lPer100",f.cost.lPer100,"number",'step="0.5" min="0"')}${fld("Tolls (average per km)","tollKm",f.cost.tollKm,"number",'step="0.01" min="0"')}
+        ${fld("Maintenance & tyres (per km)","maintKm",f.cost.maintKm,"number",'step="0.01" min="0"')}${fld("Driver cost per day (wage, allowances)","driverDay",f.cost.driverDay,"number",'step="5" min="0"')}
+        ${fld("Truck fixed costs per month (lease, insurance, tax)","fixedMonth",f.cost.fixedMonth,"number",'step="50" min="0"')}${fld("Working days per month","workDays",f.cost.workDays,"number",'step="1" min="1"')}
+        ${fld("Km a truck drives in a day","kmDay",f.cost.kmDay,"number",'step="10" min="1"')}${fld("Target margin (%)","target",f.target,"number",'step="1" min="0" max="90"')}
+        <div class="span2"><button class="btn pri" type="submit">Save costs</button></div></form>
+      <p style="margin:12px 0 0">One km costs <b>${money(k.perKm)}</b> (fuel ${money(k.fuelKm)}, tolls ${money(k.tollKm)}, maintenance ${money(k.maintKm)}), one day <b>${money(k.perDay)}</b> (driver ${money(k.driverDay)}, truck ${money(k.fixedDay)}).</p>
+    </section>
+  </div>
+
+  <section class="card sec"><h2 style="margin-bottom:6px">Price calculator</h2>
+    <p class="hint" style="margin-top:0">What to charge per car on a lane so it covers your costs and your target margin.</p>
+    <div class="grid3">
+      <label class="f">Pick up at<select id="qf">${locOpts().filter(x=>x[0]!=="__new").map(x=>opt(x[0],x[1],"")).join("")}</select></label>
+      <label class="f">Deliver to<select id="qt">${locOpts().filter(x=>x[0]!=="__new").map(x=>opt(x[0],x[1],"")).join("")}</select></label>
+      <label class="f">Distance (km)<input id="qkm" type="number" min="0" step="1"></label>
+      <label class="f">Cars on the truck<input id="qcars" type="number" min="1" max="10" step="1" value="7"></label>
+      <label class="f">Empty km back (% of the trip)<input id="qempty" type="number" min="0" max="100" step="5" value="${f.cost.emptyPct}"></label>
+      <label class="f">Target margin (%)<input id="qmargin" type="number" min="0" max="90" step="1" value="${f.target}"></label>
+    </div>
+    <div id="qout" style="margin-top:14px"></div>
+  </section>
+
+  <section class="card sec"><h2 style="margin-bottom:6px">Distances between places</h2>
+    <p class="hint" style="margin-top:0">Saved distances fill in per-km prices on orders and suggest the km on trips. They also fill in automatically when you enter km on an order.</p>
+    <div class="tools"><select class="inp" id="df" style="max-width:240px">${locOpts().filter(x=>x[0]!=="__new").map(x=>opt(x[0],x[1],"")).join("")}</select><span>→</span>
+      <select class="inp" id="dt" style="max-width:240px">${locOpts().filter(x=>x[0]!=="__new").map(x=>opt(x[0],x[1],"")).join("")}</select>
+      <input class="inp" id="dkm" type="number" min="1" step="1" placeholder="km" style="max-width:110px"><button class="btn" id="dadd">Save distance</button></div>
+    ${Object.keys(f.distances).length ? `<div class="tw"><table><thead><tr><th>From</th><th>To</th><th class="num">Km</th><th></th></tr></thead><tbody>${Object.entries(f.distances).sort((a,b)=>locName(a[0].split("|")[0]).localeCompare(locName(b[0].split("|")[0]))).map(([key,km]) => { const [a,b] = key.split("|"); return `<tr><td>${esc(locName(a))}</td><td>${esc(locName(b))}</td><td class="num">${km}</td><td class="num"><button class="btn sm" data-rmd="${esc(key)}">Remove</button></td></tr>`; }).join("")}</tbody></table></div>` : `<div class="empty">No distances saved yet.</div>`}
+  </section>`;
+};
+R.after_finance = () => {
+  const m = $("main");
+  $("fper").onchange = e => { finPeriod = e.target.value; refresh(); };
+  bindTripCards();
+  $("fuelf").onsubmit = e => { e.preventDefault(); const v = formVals($("fuelf")), f = F();
+    if(+v.current && +v.current!==+f.diesel.current) f.diesel.history = (f.diesel.history||[]).concat([{date:todayISO(), price:+v.current}]).slice(-52);
+    f.diesel.current = +v.current||0; f.diesel.base = +v.base||0; f.diesel.share = +v.share||0; f.manualFuel = v.manual; saveFin(f); refresh(); toast("Fuel surcharge now "+fuelPct()+"%"); };
+  $("costf").onsubmit = e => { e.preventDefault(); const v = formVals($("costf")), f = F(); Object.keys(v).forEach(k => { if(k==="target") f.target = +v[k]||0; else f.cost[k] = +v[k]||0; }); saveFin(f); refresh(); toast("Costs saved"); };
+  const q = () => { const k = costRates(""), f = F(), km = +$("qkm").value||0, cars = Math.max(1,+$("qcars").value||1), empty = (+$("qempty").value||0)/100, mg = Math.min(90,+$("qmargin").value||0)/100;
+    if(!km){ $("qout").innerHTML = `<p class="hint">Enter the distance${dist($("qf").value,$("qt").value)==null?" (none saved for these two places yet)":""}.</p>`; return; }
+    const tkm = km*(1+empty), days = Math.max(1, Math.ceil(tkm/(+f.cost.kmDay||650))), total = tkm*k.perKm + days*k.perDay, perCar = total/cars, price = perCar/(1-mg);
+    $("qout").innerHTML = `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+      <div class="card"><span class="hint">Cost per car</span><div style="font-size:26px;font-weight:800">${money(perCar)}</div><span class="hint">${Math.round(tkm)} km incl. empty · ${days} day${days>1?"s":""} · ${money(total)} per truck</span></div>
+      <div class="card" style="border-color:var(--em)"><span class="hint">Price per car at ${Math.round(mg*100)}% margin</span><div style="font-size:26px;font-weight:800;color:var(--em-deep)">${money(price)}</div><span class="hint">${money(price/km)} per loaded km per car</span></div>
+      <div class="card"><span class="hint">Break-even with 1 car fewer</span><div style="font-size:26px;font-weight:800">${money(total/Math.max(1,cars-1))}</div><span class="hint">if you load ${Math.max(1,cars-1)} instead of ${cars}</span></div></div>`; };
+  const fillKm = () => { const d = dist($("qf").value, $("qt").value); if(d!=null) $("qkm").value = d; q(); };
+  ["qf","qt"].forEach(id => $(id).onchange = fillKm); ["qkm","qcars","qempty","qmargin"].forEach(id => $(id).oninput = q); fillKm();
+  $("dadd").onclick = () => { const a = $("df").value, b = $("dt").value, km = +$("dkm").value; if(!a || !b || a===b || !(km>0)){ toast("Pick two different places and a distance"); return; } setDist(a,b,km); refresh(); toast("Distance saved"); };
+  m.querySelectorAll("[data-rmd]").forEach(b => b.onclick = () => { const f = F(); delete f.distances[b.dataset.rmd]; saveFin(f); refresh(); });
+};
+
 /* ================= PDF (plain text + JPEG images, no library) ================= */
 const W1252 = {"€":128,"‚":130,"„":132,"…":133,"‘":145,"’":146,"“":147,"”":148,"•":149,"–":150,"—":151,"™":153};
 function pdfStr(s){ let o = ""; for(const ch of String(s??"").replace(/→/g,"->").replace(/[✓✔]/g,"OK").replace(/≥/g,">=").replace(/×/g,"x")){ const c = ch.charCodeAt(0); const b = W1252[ch] || (c<256 ? c : 63); const x = String.fromCharCode(b); o += (x==="\\"||x==="("||x===")") ? "\\"+x : x; } return o; }
@@ -906,7 +1112,7 @@ function makeInvoice(cid){
   if(!os.length) return;
   const lines = os.map(o => ({order:o.id, desc:`Transport ${shortModel(o.model)||o.modelText} · VIN ${o.vin} · ${locName(o.from)} → ${locName(o.to)} · delivered ${fDate(new Date(o.deliveredAt).toISOString())}`, qty:1, price:+o.price||0}));
   if(os.some(o=>o.nonRunner)) os.filter(o=>o.nonRunner).forEach(o => lines.push({desc:`Non-runner surcharge · VIN ${o.vin}`, qty:1, price:25}));
-  if(+s.fuelPct) lines.push({desc:`Fuel surcharge ${s.fuelPct}%`, qty:1, price:+(sum(os,o=>o.price)*s.fuelPct/100).toFixed(2)});
+  const fs = r2(sum(os, surchargeOf)); if(fs) lines.push({desc:fuelText(), qty:1, price:fs});
   const cross = cu.country && S().company.country && cu.country.trim().toLowerCase()!==S().company.country.trim().toLowerCase() && !!cu.vat;
   const inv = put("invoices", {number:(s.invPrefix||"INV-")+String(s.nextInv||1).padStart(4,"0"), customer:cid, date:todayISO(), due:addDays(todayISO(), +(cu.terms??s.terms??30)), lines, vatPct:+s.vat||0, reverse:cross, created:Date.now()}, true);
   s.nextInv = (+s.nextInv||1)+1; put("settings", s, true);
@@ -971,7 +1177,7 @@ R.settings = () => { const s = S(), c = s.company;
     ${fld("VAT number","c.vat",c.vat)}${fld("IBAN","c.iban",c.iban)}${fld("Email","c.email",c.email,"email")}${fld("Phone","c.phone",c.phone,"tel")}</div>
     <h2 style="margin:20px 0 12px">Invoicing</h2><div class="grid3">
     ${fld("Invoice number prefix","invPrefix",s.invPrefix)}${fld("Next invoice number","nextInv",s.nextInv,"number",'min="1" step="1"')}${sel("Currency","currency",["EUR","GBP","PLN","CZK","CHF","DKK","SEK","HUF","RON"].map(x=>[x,x]),s.currency)}
-    ${fld("VAT %","vat",s.vat,"number",'step="0.1" min="0"')}${fld("Fuel surcharge %","fuelPct",s.fuelPct,"number",'step="0.1" min="0"')}${fld("Default payment terms (days)","terms",s.terms,"number",'min="0" step="1"')}</div>
+    ${fld("VAT %","vat",s.vat,"number",'step="0.1" min="0"')}<p class="hint" style="align-self:end">Fuel surcharge, prices per km and costs are set under <a href="#finance">Finance</a>.</p>${fld("Default payment terms (days)","terms",s.terms,"number",'min="0" step="1"')}</div>
     <div style="margin-top:16px"><button class="btn pri" type="submit">Save settings</button></div></form>
   <section class="card sec"><h2 style="margin-bottom:8px">Where your data is kept</h2>
     <p>${mode==="db" ? "Saved online with this page, so it is the same on your phone and your laptop. Only you (and people you share the page with as editors) can change it." : "Saved in this browser only. Open the page in the Claude app to keep it online, and export a backup now and then."}</p>
@@ -996,13 +1202,18 @@ function demoSig(name){ const c = document.createElement("canvas"); c.width = 10
   let x = 80; g.moveTo(x, 220); for(const ch of name){ const k = ch.charCodeAt(0); g.bezierCurveTo(x+20, 120+(k%7)*12, x+45, 260-(k%5)*14, x+60, 200); x += 52; } g.stroke(); return c.toDataURL("image/jpeg",0.7); }
 function loadDemo(){
   const T = todayISO(), ago = n => Date.now()-n*864e5;
-  const s = clone(S()); s.company = {name:"Brimbois Car Transport", address:"Via Roma 12\n46043 Castiglione delle Stiviere (MN)", country:"Italy", vat:"IT01234567890", iban:"IT60 X054 2811 1010 0000 0123 456", email:"office@example.com", phone:"+39 0376 000000"}; s.nextInv = Math.max(+s.nextInv||1, 3); put("settings", s, true);
+  const s = clone(S()); s.company = {name:"Brimbois Car Transport", address:"Via Roma 12\n46043 Castiglione delle Stiviere (MN)", country:"Italy", vat:"IT01234567890", iban:"IT60 X054 2811 1010 0000 0123 456", email:"office@example.com", phone:"+39 0376 000000"}; s.nextInv = Math.max(+s.nextInv||1, 3); s.vat = 22; put("settings", s, true);
   const C = (name, country, vat, rate, terms, address) => put("customers", {name, country, vat, rate, terms, address, email:""}, true).id;
-  const weber = C("Autohaus Weber GmbH","Germany","DE123456789",210,30,"Leopoldstraße 50\n80802 München"), dupont = C("Garage Dupont SA","Belgium","BE0123456789",145,30,"Rue de Liège 8\n4000 Liège"), rossi = C("Concessionaria Rossi Srl","Italy","IT09876543210",120,60,"Viale del Lavoro 3\n37135 Verona");
+  const weber = C("Autohaus Weber GmbH","Germany","DE123456789",0,30,"Leopoldstraße 50\n80802 München"), dupont = C("Garage Dupont SA","Belgium","BE0123456789",145,30,"Rue de Liège 8\n4000 Liège"), rossi = C("Concessionaria Rossi Srl","Italy","IT09876543210",120,60,"Viale del Lavoro 3\n37135 Verona");
+  [[weber,{priceMode:"km", rateKm:0.34, minPrice:150}],[rossi,{fuelClause:false}]].forEach(([id,x]) => put("customers", Object.assign(clone(get("customers",id)), x), true));
   const L = (name, type, country, address, hours) => put("locations", {name, type, country, address, hours}, true).id;
   const zee = L("Zeebrugge port compound","Port","Belgium","Zeebrugge port, 8380 Brugge","Mon–Fri 06:00–22:00, Sat 06:00–14:00"), ant = L("Antwerp vehicle terminal","Port","Belgium","Antwerp port, 2030 Antwerpen","24/7"), mn = L("Mantova compound","Compound","Italy","Strada Cipata, 46100 Mantova","Mon–Fri 07:00–18:00");
   const wm = L("Autohaus Weber München","Dealer","Germany","Leopoldstraße 50, 80802 München","Mon–Fri 08:00–18:00, key box after hours"), wa = L("Autohaus Weber Augsburg","Dealer","Germany","Haunstetter Str. 21, 86161 Augsburg","Mon–Fri 08:00–18:00");
   const dl = L("Garage Dupont Liège","Dealer","Belgium","Rue de Liège 8, 4000 Liège","Mon–Sat 08:30–18:00"), rv = L("Concessionaria Rossi Verona","Dealer","Italy","Viale del Lavoro 3, 37135 Verona","Mon–Sat 08:30–19:00"), rb = L("Concessionaria Rossi Brescia","Dealer","Italy","Via Triumplina 40, 25123 Brescia","Mon–Sat 08:30–19:00");
+  const fin = F(); fin.diesel = {base:1.48, current:1.55, share:30, history:[{date:addDays(T,-14),price:1.52},{date:addDays(T,-7),price:1.53},{date:T,price:1.55}]};
+  fin.distances = {[zee+"|"+wm]:830, [zee+"|"+wa]:780, [wa+"|"+wm]:70, [ant+"|"+dl]:125, [mn+"|"+rv]:45, [mn+"|"+rb]:70, [rb+"|"+rv]:70};
+  { const s2 = clone(S()); s2.fin = fin; put("settings", s2, true); }
+  const dupl = clone(get("customers",dupont)); dupl.lanes = [{from:ant, to:dl, price:165}]; put("customers", dupl, true);
   const t1 = put("trucks", {plate:"GA 123 BC", trailer:"XA 456 DE", builder:"Lohr", model:"Eurolohr 200", cab:"low", profile:"eurolohr200-low", inspection:addDays(T,120), insurance:600000}, true).id;
   const t2 = put("trucks", {plate:"GB 789 FG", trailer:"XB 012 HI", builder:"Lohr", model:"Eurolohr 200", cab:"high", profile:"eurolohr200-high", inspection:addDays(T,18), insurance:500000}, true).id;
   const d1 = put("drivers", {name:"Marek Nowak", phone:"+48 600 000 000", langs:"PL, EN, DE", licence:addDays(T,900), tacho:addDays(T,400), cpc:addDays(T,700)}, true).id;
@@ -1010,17 +1221,17 @@ function loadDemo(){
   let n = 0; const vins = ["WVWZZZCDZMW","WVGZZZ5NZJW","WVWZZZAWZKU","WAUZZZGY0NA","TMBJJ7NX5MY","YV1LFA2BCH1","WBACV610X09","VF1RJA00X61","VF3UPHNSKL4","7SAYGDEE5PF","JTMW43FV40D","WP0ZZZ99ZNS","ZFA3120000J","WVWZZZCDZNW","YV1ZWA8UDL1","SJNFAAJ10U2"];
   const O = (model, cust, from, to, price, extra) => { const v = (vins[n%vins.length] + String(100000+n*7919).slice(-6)).slice(0,17); n++; return put("orders", Object.assign({vin:v, model, customer:cust, from, to, price, ready:addDays(T,-2), due:addDays(T,4), released:true, releasedAt:ago(2), created:ago(3)-n*1000, ref:"PO-"+(4100+n)}, extra||{}), true); };
   // trip 1: today, ready to plan (Zeebrugge -> Munich / Augsburg)
-  const a = [O("Volkswagen Golf Mk8 (CD1) (2020-)",weber,zee,wm,210), O("Volkswagen Tiguan AD1 (2016-2024)",weber,zee,wm,210), O("Volkswagen Polo AW (2017-)",weber,zee,wa,195), O("Audi A3 Sportback 8Y (2020-)",weber,zee,wa,195,{value:38000}), O("Skoda Octavia Combi NX (2019-)",weber,zee,wm,210), O("Volvo XC90 256 (2015-)",weber,zee,wa,230,{value:82000}), O("BMW X5 G05 (2018-)",weber,zee,wm,230,{value:91000})];
-  const trip1 = put("trips", {name:"Zeebrugge → München / Augsburg", date:T, truck:t1, driver:d1, route:"de", orders:a.map(o=>o.id), stops:[wa,wm], created:ago(1), km:880}, true);
+  const a = [O("Volkswagen Golf Mk8 (CD1) (2020-)",weber,zee,wm,282.2), O("Volkswagen Tiguan AD1 (2016-2024)",weber,zee,wm,282.2), O("Volkswagen Polo AW (2017-)",weber,zee,wa,265.2), O("Audi A3 Sportback 8Y (2020-)",weber,zee,wa,265.2,{value:38000}), O("Skoda Octavia Combi NX (2019-)",weber,zee,wm,282.2), O("Volvo XC90 256 (2015-)",weber,zee,wa,265.2,{value:82000}), O("BMW X5 G05 (2018-)",weber,zee,wm,282.2,{value:91000})];
+  const trip1 = put("trips", {name:"Zeebrugge → München / Augsburg", date:T, truck:t1, driver:d1, route:"de", orders:a.map(o=>o.id), stops:[wa,wm], created:ago(1), km:1060, days:2}, true);
   a.forEach(o => { o.trip = trip1.id; put("orders",o,true); });
   // trip 2: on the road (Antwerp -> Liège), picked up yesterday with one scratch noted
-  const b = [O("Renault Clio BF (2019-)",dupont,ant,dl,145), O("Peugeot 208 P21 (2019-)",dupont,ant,dl,145), O("Peugeot 3008 P84 (2016-2023)",dupont,ant,dl,150)];
-  const trip2 = put("trips", {name:"Antwerp → Liège", date:addDays(T,-1), truck:t2, driver:d2, route:"base", orders:b.map(o=>o.id), stops:[dl], created:ago(2), km:130}, true);
+  const b = [O("Renault Clio BF (2019-)",dupont,ant,dl,165), O("Peugeot 208 P21 (2019-)",dupont,ant,dl,165), O("Peugeot 3008 P84 (2016-2023)",dupont,ant,dl,165)];
+  const trip2 = put("trips", {name:"Antwerp → Liège", date:addDays(T,-1), truck:t2, driver:d2, route:"base", orders:b.map(o=>o.id), stops:[dl], created:ago(2), km:160, days:0.5}, true);
   const h2 = put("handovers", {trip:trip2.id, kind:"pickup", loc:ant, orders:b.map(o=>o.id), at:ago(1), name:"J. Peeters", sig:demoSig("JPeeters"), keys:true, driver:d2, truck:t2, checks:{}}, true);
   b.forEach((o,i) => { o.trip = trip2.id; o.loadedAt = ago(1); o.hoPickup = h2.id; o.dmgPickup = i===2 ? [{zone:"rb", type:"Scratch", sev:"Small (under 2 cm)"}] : []; put("orders",o,true); });
   // trip 3: completed (Mantova -> Verona / Brescia), not invoiced yet
   const c = [O("Fiat 500 312 (2007-2024)",rossi,mn,rv,120), O("Toyota Yaris XP210 (2020-)",rossi,mn,rv,120), O("Alfa Romeo Stelvio 949 (2017-)",rossi,mn,rb,130), O("Ford Puma J2K (2019-)",rossi,mn,rb,120)];
-  const trip3 = put("trips", {name:"Mantova → Verona / Brescia", date:addDays(T,-3), truck:t1, driver:d1, route:"base", orders:c.map(o=>o.id), stops:[rb,rv], created:ago(4), km:110, cost:310}, true);
+  const trip3 = put("trips", {name:"Mantova → Verona / Brescia", date:addDays(T,-3), truck:t1, driver:d1, route:"base", orders:c.map(o=>o.id), stops:[rb,rv], created:ago(4), km:160, days:0.5, tolls:21.4}, true);
   const h3 = put("handovers", {trip:trip3.id, kind:"pickup", loc:mn, orders:c.map(o=>o.id), at:ago(3), name:"L. Bianchi", sig:demoSig("LBianchi"), keys:true, driver:d1, truck:t1, checks:{}}, true);
   const h4 = put("handovers", {trip:trip3.id, kind:"delivery", loc:rb, orders:[c[2].id,c[3].id], at:ago(3)+3*36e5, name:"M. Ferri", sig:demoSig("MFerri"), keys:true, driver:d1, truck:t1, checks:{}}, true);
   const h5 = put("handovers", {trip:trip3.id, kind:"delivery", loc:rv, orders:[c[0].id,c[1].id], at:ago(3)+5*36e5, name:"", unattended:true, keys:true, notes:"Keys in the dealer's key box", driver:d1, truck:t1, checks:{}}, true);
@@ -1033,7 +1244,7 @@ function loadDemo(){
   const inv2 = put("invoices", {number:"INV-0002", customer:weber, date:addDays(T,-23), due:addDays(T,7), sentAt:addDays(T,-23), paidAt:addDays(T,-2), vatPct:21, reverse:true, created:ago(23), lines:[{order:old2.id, desc:`Transport ${shortModel(old2.model)} · VIN ${old2.vin} · Zeebrugge port compound → Autohaus Weber München`, qty:1, price:210}]}, true);
   old2.invoice = inv2.id; put("orders",old2,true);
   // waiting: released and not released
-  O("Tesla Model Y Pre-facelift (2020-2025)",weber,zee,wa,210); O("Toyota RAV4 XA50 (2018-2025)",dupont,ant,dl,150);
+  O("Tesla Model Y Pre-facelift (2020-2025)",weber,zee,wa,265.2); O("Toyota RAV4 XA50 (2018-2025)",dupont,ant,dl,165);
   O("Porsche 911 992 (2019-)",weber,zee,wm,260,{released:false, releasedAt:null, value:145000, notes:"Very low car: R6 only"}); O("Kia Sportage NQ5 (2021-)",rossi,mn,rv,120,{released:false, releasedAt:null});
   dbEmpty = false; refresh(); toast("Demo data loaded");
 }
