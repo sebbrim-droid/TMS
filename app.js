@@ -307,8 +307,8 @@ function orderForm(id){
       <label class="f">Price for this car (${S().currency||"EUR"})<input name="price" type="number" step="0.01" min="0" value="${esc(o.price??"")}"><span class="hint" id="pricehow"></span></label>
       ${sel("Pick up at","from",locOpts(),o.from)}
       ${sel("Deliver to","to",locOpts(),o.to)}
-      ${fld("Distance pickup → delivery (km)","km",o.km||dist(o.from,o.to)||"","number",'min="0" step="1"')}
-      <p class="hint" style="align-self:end;margin:0 0 10px">Used for per-km prices. Saved for the next car on this lane.</p>
+      <label class="f">Distance pickup → delivery (km)<input name="km" type="number" min="0" step="1" value="${esc(o.km||(o.from&&o.to?distInfo(o.from,o.to).km:"")||"")}"><span class="hint" id="kmhow"></span></label>
+      <p class="hint" style="align-self:end;margin:0 0 10px">Used for per-km prices. A distance you change is saved for the next car on this lane.</p>
       ${fld("Ready from","ready",o.ready,"date")}
       ${fld("Deliver by","due",o.due,"date")}
       ${fld("Car value for insurance ("+(S().currency||"EUR")+", optional)","value",o.value,"number",'step="100" min="0"')}
@@ -329,13 +329,17 @@ function orderForm(id){
         if(!manual && p && p.price!=null) f.price.value = p.price; };
       f.price.oninput = () => { manual = f.price.value!==""; reprice(); };
       f.customer.onchange = reprice; f.km.oninput = reprice;
-      ["from","to"].forEach(k => f[k].onchange = () => { if(f[k].value==="__new"){ f[k].value = ""; locationForm(null, l => { f[k].innerHTML = locOpts().map(x=>opt(x[0],x[1],l.id)).join(""); }); return; } const d = dist(f.from.value, f.to.value); if(d!=null) f.km.value = d; reprice(); });
-      reprice();
+      ["from","to"].forEach(k => f[k].onchange = () => { if(f[k].value==="__new"){ f[k].value = ""; locationForm(null, l => { f[k].innerHTML = locOpts().map(x=>opt(x[0],x[1],l.id)).join(""); }); return; } const i = f.from.value && f.to.value ? distInfo(f.from.value, f.to.value) : null; if(i && i.km!=null) f.km.value = i.km; kmHow(); reprice(); });
+      let kmExp = null;
+      const kmHow = () => { const i = f.from.value && f.to.value ? distInfo(f.from.value, f.to.value) : null; kmExp = i && i.km;
+        $("kmhow").textContent = !i ? "" : f.km.value && +f.km.value!==i.km ? (i.km!=null ? `Yours · ${i.saved?"saved":"expected"} ${i.km} km` : "Yours") : i.text; };
+      f.km.addEventListener("input", kmHow);
+      reprice(); kmHow();
       $("osave").onclick = () => {
         const v = formVals(f); delete v.brand;
         if(!v.vin && !v.ref){ toast("Add a VIN or a reference"); return; }
         Object.assign(o, v, {vin:v.vin.toUpperCase(), price:+v.price||0, value:+v.value||0, km:+v.km||0});
-        if(o.km && o.from && o.to && dist(o.from,o.to)==null) setDist(o.from, o.to, o.km);
+        if(o.km && o.from && o.to && dist(o.from,o.to)==null && o.km!==kmExp) setDist(o.from, o.to, o.km);
         if(v.model) delete o.modelText;
         if(o.released && !o.releasedAt) o.releasedAt = Date.now();
         if(!o.created) o.created = Date.now();
@@ -379,7 +383,7 @@ R.customers = () => {
   </tbody></table></div>` : `<div class="empty">No customers yet.</div>`}</section>
   <section class="sec"><div class="tools"><h2 style="margin-right:auto">Places</h2><button class="btn pri" data-act="nl">+ Place</button></div>
   ${ls.length ? `<div class="tw"><table class="stack"><thead><tr><th>Name</th><th>Type</th><th>Address</th><th>Country</th><th>Opening hours</th></tr></thead><tbody>
-  ${ls.map(l=>`<tr class="click" data-l="${l.id}"><td><b>${esc(l.name)}</b></td><td>${esc(l.type||"")}</td><td>${esc(l.address||"")}</td><td>${esc(l.country||"")}</td><td>${esc(l.hours||"")}</td></tr>`).join("")}
+  ${ls.map(l=>`<tr class="click" data-loc="${l.id}"><td><b>${esc(l.name)}</b></td><td>${esc(l.type||"")}</td><td>${esc(l.address||"")}</td><td>${esc(l.country||"")}</td><td>${esc(l.hours||"")}</td></tr>`).join("")}
   </tbody></table></div>` : `<div class="empty">No places yet.</div>`}</section>`;
 };
 R.after_customers = () => {
@@ -387,7 +391,7 @@ R.after_customers = () => {
   m.querySelector('[data-act="nc"]').onclick = () => customerForm();
   m.querySelector('[data-act="nl"]').onclick = () => locationForm();
   m.querySelectorAll("[data-c]").forEach(r => r.onclick = () => customerForm(r.dataset.c));
-  m.querySelectorAll("[data-l]").forEach(r => r.onclick = () => locationForm(r.dataset.l));
+  m.querySelectorAll("tr[data-loc]").forEach(r => r.onclick = () => locationForm(r.dataset.loc));
 };
 function simpleForm(title, col, id, fieldsHtml, defaults, after){
   const o = id ? clone(get(col,id)) : Object.assign({}, defaults||{});
@@ -438,7 +442,9 @@ function locationForm(id, after){ simpleForm(id?"Place":"New place","locations",
   ${fld("Name","name",l.name)}${sel("Type","type",["Port","Compound","Factory","Dealer","Private address","Other"].map(x=>[x,x]),l.type||"Dealer")}
   <label class="f span2">Address<textarea name="address" style="min-height:60px">${esc(l.address||"")}</textarea></label>
   ${fld("Country","country",l.country)}${fld("Opening hours","hours",l.hours,"text",'placeholder="e.g. Mon–Fri 07:00–17:00, key box after hours"')}
-  ${fld("Contact person / phone","contact",l.contact)}`, {type:"Dealer"}, after); }
+  ${fld("Contact person / phone","contact",l.contact)}
+  <p class="hint span2" style="margin:6px 0 0">Location for expected distances: ${(()=>{ const c = matchCity([l.name,l.address,l.country].filter(Boolean).join(" , ")); return c ? "found <b>"+esc(c.name)+"</b> in the name or address." : "no town recognised yet: put the town in the address, or add coordinates."; })()} Coordinates are optional and more exact (right-click a spot in Google Maps to copy them).</p>
+  ${fld("Latitude (optional)","lat",l.lat??"","text",'inputmode="decimal" placeholder="e.g. 51.3330"')}${fld("Longitude (optional)","lon",l.lon??"","text",'inputmode="decimal" placeholder="e.g. 3.2050"')}`, {type:"Dealer"}, after); }
 
 /* ================= fleet & drivers ================= */
 const PROFILES = [["eurolohr200-low","Lohr Eurolohr 200 · low cab"],["eurolohr200-high","Lohr Eurolohr 200 · high cab"]];
@@ -566,7 +572,7 @@ function tripForm(id){
     ${sel("Truck","truck",[["","No truck"]].concat(list("trucks").map(x=>[x.id,truckName(x.id)])),t.truck)}
     ${sel("Driver","driver",[["","No driver"]].concat(list("drivers").map(x=>[x.id,x.name])),t.driver)}
     ${sel("Route rules for the load planner","route",ROUTES,t.route||"base")}
-    <label class="f">Distance incl. empty km (km)<input name="km" type="number" min="0" step="1" value="${esc(t.km||"")}"><span class="hint">${(()=>{ const r = tripRouteKm(t); return r.km!=null ? "Known distances: "+r.km+" km loaded" : r.missing.length ? "Missing distance: "+r.missing.map(p=>locName(p[0])+" → "+locName(p[1])).join(", ") : ""; })()}</span></label>
+    <label class="f">Distance incl. empty km (km)<input name="km" type="number" min="0" step="1" value="${esc(t.km||"")}"><span class="hint">${(()=>{ const r = tripRouteKm(t); return r.km!=null ? (r.est?"Expected":"Known")+" distances: "+r.km+" km loaded, add the way back" : r.missing.length ? "Missing distance: "+r.missing.map(p=>locName(p[0])+" → "+locName(p[1])).join(", ") : ""; })()}</span></label>
     ${fld("Days (empty = from km, 0.5 for half a day)","days",t.days||"","number",'min="0" step="0.5"')}
     ${fld("Tolls paid ("+(S().currency||"EUR")+", empty = estimate)","tolls",t.tolls??"","number",'min="0" step="0.01"')}
     ${fld("Other costs ("+(S().currency||"EUR")+")","otherCost",t.otherCost||"","number",'min="0" step="0.01"')}
@@ -787,7 +793,7 @@ R.after_handover = id => {
 const FIN_DEF = {
   diesel:{base:1.55, current:1.55, share:30, history:[]},   // fuel clause: surcharge % = (current - base) / base x fuel share of cost
   manualFuel:"",                                            // a fixed surcharge % instead of the diesel formula
-  cost:{lPer100:32, maintKm:0.11, tollKm:0.17, driverDay:240, fixedMonth:4300, workDays:21, kmDay:650, emptyPct:25},
+  cost:{roadFactor:1.22, lPer100:32, maintKm:0.11, tollKm:0.17, driverDay:240, fixedMonth:4300, workDays:21, kmDay:650, emptyPct:25},
   distances:{}, target:15
 };
 function F(){ const f = clone(FIN_DEF), s = S().fin||{}; Object.keys(s).forEach(k => { f[k] = (s[k] && typeof s[k]==="object" && !Array.isArray(s[k])) ? Object.assign(f[k]||{}, s[k]) : s[k]; }); return f; }
@@ -802,7 +808,7 @@ function priceFor(o){
   const c = get("customers", o.customer); if(!c) return null;
   const lane = (c.lanes||[]).find(l => l.from===o.from && l.to===o.to);
   if(lane && +lane.price) return {price:+lane.price, how:"Lane price "+locName(o.from)+" → "+locName(o.to)};
-  const km = +o.km || dist(o.from, o.to);
+  const km = +o.km || dist(o.from, o.to) || (o.from && o.to ? distInfo(o.from, o.to).km : null);
   if(c.priceMode==="km"){ if(!km) return {price:null, how:"Per-km price: add the distance"}; const p = Math.max(+c.minPrice||0, km*(+c.rateKm||0)); return {price:r2(p), how:`${km} km × ${money(c.rateKm)}/km${+c.minPrice && p===+c.minPrice?" (minimum price)":""}`}; }
   if(+c.rate) return {price:+c.rate, how:"Fixed price per car"};
   return null;
@@ -833,8 +839,9 @@ function tripMoney(t){
 function tripRouteKm(t){ // suggested trip distance from the known place-to-place distances: pickup -> stop 1 -> stop 2 ...
   const os = tripOrders(t); if(!os.length) return {km:null, missing:[]};
   const pts = [os[0].from].concat(tripStops(t)), missing = []; let km = 0;
-  for(let i=1;i<pts.length;i++){ const d = dist(pts[i-1], pts[i]); if(d==null) missing.push([pts[i-1],pts[i]]); else km += d; }
-  return {km: missing.length ? null : km, missing, pts};
+  let est = false;
+  for(let i=1;i<pts.length;i++){ const d = distInfo(pts[i-1], pts[i]); if(d.km==null) missing.push([pts[i-1],pts[i]]); else { km += d.km; if(d.est) est = true; } }
+  return {km: missing.length ? null : km, missing, pts, est};
 }
 function tripMoneyHtml(t){
   const m = tripMoney(t), truck = get("trucks", t.truck), val = sum(m.os, o=>o.value), sug = tripRouteKm(t);
@@ -847,10 +854,10 @@ function tripMoneyHtml(t){
     <tr><td><b>Margin</b></td><td class="num"><b style="color:${m.margin<0?"var(--bad)":"var(--em-deep)"}">${money(m.margin)} · ${m.pct.toFixed(0)}%</b></td></tr>
     <tr><td>Revenue / cost per km</td><td class="num">${money(m.rev/m.cost.km)} / ${money(m.cost.total/m.cost.km)}</td></tr>
     <tr><td>Cost per car</td><td class="num">${m.os.length?money(m.cost.total/m.os.length):"–"}</td></tr>`
-    : `<tr><td colspan="2"><span class="hint">Add the distance to see costs and margin.</span> ${sug.km!=null?`<button class="btn sm" data-setkm="${sug.km}">Use ${sug.km} km</button>`:""}<button class="btn sm" data-act="edit">Add km</button></td></tr>`}
+    : `<tr><td colspan="2"><span class="hint">Add the distance to see costs and margin.</span> ${sug.km!=null?`<button class="btn sm" data-setkm="${sug.km}">Use ${sug.est?"expected ":""}${sug.km} km</button>`:""}<button class="btn sm" data-act="edit">Add km</button></td></tr>`}
     ${val?`<tr><td>Cargo value</td><td class="num">${money(val)}${truck&&truck.insurance&&val>truck.insurance?` <span class="st bad">over insurance ${money(truck.insurance)}</span>`:""}</td></tr>`:""}
   </tbody></table>
-  ${m.cost.km && sug.km!=null && sug.km!==m.cost.km ? `<p class="hint" style="margin:8px 0 0">Known distances add up to ${sug.km} km loaded, without the way back. <button class="btn sm" data-setkm="${sug.km}">Use ${sug.km} km</button></p>`:""}`;
+  ${m.cost.km && sug.km!=null && sug.km!==m.cost.km ? `<p class="hint" style="margin:8px 0 0">${sug.est?"Expected":"Known"} distances add up to ${sug.km} km loaded, without the way back. <button class="btn sm" data-setkm="${sug.km}">Use ${sug.km} km</button></p>`:""}`;
 }
 
 /* ----- finance tab ----- */
@@ -902,7 +909,7 @@ R.finance = () => {
         ${fld("Fuel use (L per 100 km)","lPer100",f.cost.lPer100,"number",'step="0.5" min="0"')}${fld("Tolls (average per km)","tollKm",f.cost.tollKm,"number",'step="0.01" min="0"')}
         ${fld("Maintenance & tyres (per km)","maintKm",f.cost.maintKm,"number",'step="0.01" min="0"')}${fld("Driver cost per day (wage, allowances)","driverDay",f.cost.driverDay,"number",'step="5" min="0"')}
         ${fld("Truck fixed costs per month (lease, insurance, tax)","fixedMonth",f.cost.fixedMonth,"number",'step="50" min="0"')}${fld("Working days per month","workDays",f.cost.workDays,"number",'step="1" min="1"')}
-        ${fld("Km a truck drives in a day","kmDay",f.cost.kmDay,"number",'step="10" min="1"')}${fld("Target margin (%)","target",f.target,"number",'step="1" min="0" max="90"')}
+        ${fld("Km a truck drives in a day","kmDay",f.cost.kmDay,"number",'step="10" min="1"')}${fld("Road factor (road km per straight-line km)","roadFactor",f.cost.roadFactor,"number",'step="0.01" min="1" max="2"')}${fld("Target margin (%)","target",f.target,"number",'step="1" min="0" max="90"')}
         <div class="span2"><button class="btn pri" type="submit">Save costs</button></div></form>
       <p style="margin:12px 0 0">One km costs <b>${money(k.perKm)}</b> (fuel ${money(k.fuelKm)}, tolls ${money(k.tollKm)}, maintenance ${money(k.maintKm)}), one day <b>${money(k.perDay)}</b> (driver ${money(k.driverDay)}, truck ${money(k.fixedDay)}).</p>
     </section>
@@ -911,9 +918,10 @@ R.finance = () => {
   <section class="card sec"><h2 style="margin-bottom:6px">Price calculator</h2>
     <p class="hint" style="margin-top:0">What to charge per car on a lane so it covers your costs and your target margin.</p>
     <div class="grid3">
-      <label class="f">Pick up at<select id="qf">${locOpts().filter(x=>x[0]!=="__new").map(x=>opt(x[0],x[1],"")).join("")}</select></label>
-      <label class="f">Deliver to<select id="qt">${locOpts().filter(x=>x[0]!=="__new").map(x=>opt(x[0],x[1],"")).join("")}</select></label>
-      <label class="f">Distance (km)<input id="qkm" type="number" min="0" step="1"></label>
+      <label class="f">Pick up at<input id="qf" list="qplaces" placeholder="One of your places, or any town" autocomplete="off"></label>
+      <label class="f">Deliver to<input id="qt" list="qplaces" placeholder="One of your places, or any town" autocomplete="off"></label>
+      <label class="f">Distance (km)<input id="qkm" type="number" min="0" step="1"><span class="hint" id="qkmhow"></span></label>
+      <datalist id="qplaces">${list("locations").map(l=>`<option value="${esc(l.name)}">`).join("")}${CITIES.map(c=>`<option value="${esc(c.name)}">${c.cc}</option>`).join("")}</datalist>
       <label class="f">Cars on the truck<input id="qcars" type="number" min="1" max="10" step="1" value="7"></label>
       <label class="f">Empty km back (% of the trip)<input id="qempty" type="number" min="0" max="100" step="5" value="${f.cost.emptyPct}"></label>
       <label class="f">Target margin (%)<input id="qmargin" type="number" min="0" max="90" step="1" value="${f.target}"></label>
@@ -938,17 +946,442 @@ R.after_finance = () => {
     f.diesel.current = +v.current||0; f.diesel.base = +v.base||0; f.diesel.share = +v.share||0; f.manualFuel = v.manual; saveFin(f); refresh(); toast("Fuel surcharge now "+fuelPct()+"%"); };
   $("costf").onsubmit = e => { e.preventDefault(); const v = formVals($("costf")), f = F(); Object.keys(v).forEach(k => { if(k==="target") f.target = +v[k]||0; else f.cost[k] = +v[k]||0; }); saveFin(f); refresh(); toast("Costs saved"); };
   const q = () => { const k = costRates(""), f = F(), km = +$("qkm").value||0, cars = Math.max(1,+$("qcars").value||1), empty = (+$("qempty").value||0)/100, mg = Math.min(90,+$("qmargin").value||0)/100;
-    if(!km){ $("qout").innerHTML = `<p class="hint">Enter the distance${dist($("qf").value,$("qt").value)==null?" (none saved for these two places yet)":""}.</p>`; return; }
+    if(!km){ $("qout").innerHTML = `<p class="hint">Pick both ends, or type the distance.</p>`; return; }
     const tkm = km*(1+empty), days = Math.max(1, Math.ceil(tkm/(+f.cost.kmDay||650))), total = tkm*k.perKm + days*k.perDay, perCar = total/cars, price = perCar/(1-mg);
     $("qout").innerHTML = `<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
       <div class="card"><span class="hint">Cost per car</span><div style="font-size:26px;font-weight:800">${money(perCar)}</div><span class="hint">${Math.round(tkm)} km incl. empty · ${days} day${days>1?"s":""} · ${money(total)} per truck</span></div>
       <div class="card" style="border-color:var(--em)"><span class="hint">Price per car at ${Math.round(mg*100)}% margin</span><div style="font-size:26px;font-weight:800;color:var(--em-deep)">${money(price)}</div><span class="hint">${money(price/km)} per loaded km per car</span></div>
       <div class="card"><span class="hint">Break-even with 1 car fewer</span><div style="font-size:26px;font-weight:800">${money(total/Math.max(1,cars-1))}</div><span class="hint">if you load ${Math.max(1,cars-1)} instead of ${cars}</span></div></div>`; };
-  const fillKm = () => { const d = dist($("qf").value, $("qt").value); if(d!=null) $("qkm").value = d; q(); };
-  ["qf","qt"].forEach(id => $(id).onchange = fillKm); ["qkm","qcars","qempty","qmargin"].forEach(id => $(id).oninput = q); fillKm();
+  // each end: one of your places (saved distance or its town) or any town from the built-in list
+  const end = txt => { const t = normTxt(txt); if(!t) return null; const l = list("locations").find(x => normTxt(x.name)===t);
+    if(l) return {loc:l.id, name:l.name, pt:coordsOf(l.id)}; const c = matchCity(txt); return c ? {name:c.name, pt:{lat:c.lat, lon:c.lon, how:c.name}} : {name:txt, pt:null}; };
+  let manual = false, expected = null, ends = [null,null];
+  const how = () => { const a = ends[0], b = ends[1], el = $("qkmhow");
+    if(manual){ el.innerHTML = `Your distance${expected!=null?` · expected ${expected} km <button class="btn sm" type="button" id="qback">Use expected</button>`:""}${a&&b&&a.loc&&b.loc?` <button class="btn sm" type="button" id="qsave">Save for this lane</button>`:""}`; }
+    else el.textContent = expected==null ? (a&&b ? `No location found for ${!a.pt?a.name:b.name}: type the km` : "") : a.loc && b.loc && dist(a.loc,b.loc)!=null ? "Your saved distance for this lane (you can change it)" : `Expected ≈ ${expected} km, straight line × ${roadFactor()} road factor. Change it if you know better.`;
+    const bk = $("qback"); if(bk) bk.onclick = () => { manual = false; $("qkm").value = expected; how(); q(); };
+    const sv = $("qsave"); if(sv) sv.onclick = () => { setDist(a.loc, b.loc, +$("qkm").value); toast("Saved: used for orders on this lane too"); manual = false; expected = +$("qkm").value; refresh(); }; };
+  const fillKm = () => { ends = [end($("qf").value), end($("qt").value)]; const [a,b] = ends; expected = null;
+    if(a && b){ const s = a.loc && b.loc ? dist(a.loc, b.loc) : null; if(s!=null) expected = s; else { const e = estKm(a.pt, b.pt); if(e) expected = e.km; } }
+    manual = false; if(expected!=null) $("qkm").value = expected; how(); q(); };
+  ["qf","qt"].forEach(id => { $(id).onchange = fillKm; $(id).oninput = () => { if(list("locations").some(l=>l.name===$(id).value) || CITIES.some(c=>c.name===$(id).value)) fillKm(); }; });
+  $("qkm").oninput = () => { manual = $("qkm").value!=="" && +$("qkm").value!==expected; how(); q(); };
+  ["qcars","qempty","qmargin"].forEach(id => $(id).oninput = q);
+  { const ls = list("locations"), pu = ls.find(l => /port|compound|factory/i.test(l.type||"")), dl = ls.find(l => l!==pu && (l.type==="Dealer")); if(pu) $("qf").value = pu.name; if(dl) $("qt").value = dl.name; }
+  fillKm();
   $("dadd").onclick = () => { const a = $("df").value, b = $("dt").value, km = +$("dkm").value; if(!a || !b || a===b || !(km>0)){ toast("Pick two different places and a distance"); return; } setDist(a,b,km); refresh(); toast("Distance saved"); };
   m.querySelectorAll("[data-rmd]").forEach(b => b.onclick = () => { const f = F(); delete f.distances[b.dataset.rmd]; saveFin(f); refresh(); });
 };
+
+/* ================= expected distances: built-in city coordinates x road factor ================= */
+// Name|other names;lat;lon;country. Approximate city-centre coordinates, enough for a distance estimate.
+const CITY_SRC = `Brussels|Bruxelles|Brussel;50.85;4.35;BE
+Antwerp|Antwerpen|Anvers;51.22;4.40;BE
+Zeebrugge;51.33;3.20;BE
+Bruges|Brugge;51.21;3.22;BE
+Ghent|Gent|Gand;51.05;3.72;BE
+Liège|Liege|Luik|Lüttich;50.63;5.57;BE
+Hasselt;50.93;5.34;BE
+Genk;50.97;5.50;BE
+Leuven|Louvain;50.88;4.70;BE
+Charleroi;50.41;4.44;BE
+Namur|Namen;50.47;4.87;BE
+Mons|Bergen;50.45;3.95;BE
+Kortrijk|Courtrai;50.83;3.26;BE
+Ostend|Oostende;51.22;2.92;BE
+Mechelen|Malines;51.03;4.48;BE
+Aalst;50.94;4.04;BE
+Sint-Truiden;50.82;5.19;BE
+Tongeren;50.78;5.46;BE
+Arlon;49.68;5.82;BE
+Amsterdam;52.37;4.90;NL
+Rotterdam;51.92;4.48;NL
+The Hague|Den Haag;52.08;4.30;NL
+Utrecht;52.09;5.12;NL
+Eindhoven;51.44;5.47;NL
+Tilburg;51.56;5.09;NL
+Breda;51.59;4.78;NL
+Nijmegen;51.84;5.86;NL
+Arnhem;51.98;5.91;NL
+Groningen;53.22;6.57;NL
+Maastricht;50.85;5.69;NL
+Venlo;51.37;6.17;NL
+Born;51.03;5.81;NL
+Vlissingen|Flushing;51.44;3.57;NL
+Zwolle;52.51;6.09;NL
+Amersfoort;52.16;5.39;NL
+Moerdijk;51.70;4.62;NL
+Luxembourg|Luxemburg;49.61;6.13;LU
+Paris;48.86;2.35;FR
+Lyon;45.76;4.84;FR
+Marseille;43.30;5.37;FR
+Lille;50.63;3.06;FR
+Le Havre;49.49;0.11;FR
+Rouen;49.44;1.10;FR
+Strasbourg;48.58;7.75;FR
+Mulhouse;47.75;7.34;FR
+Sochaux;47.51;6.83;FR
+Metz;49.12;6.18;FR
+Nancy;48.69;6.18;FR
+Reims;49.26;4.03;FR
+Valenciennes;50.36;3.52;FR
+Dunkirk|Dunkerque;51.03;2.38;FR
+Calais;50.95;1.86;FR
+Nantes;47.22;-1.55;FR
+Rennes;48.11;-1.68;FR
+Bordeaux;44.84;-0.58;FR
+Toulouse;43.60;1.44;FR
+Nice;43.70;7.27;FR
+Montpellier;43.61;3.88;FR
+Grenoble;45.19;5.72;FR
+Dijon;47.32;5.04;FR
+Orléans|Orleans;47.90;1.90;FR
+Tours;47.39;0.69;FR
+Le Mans;48.00;0.20;FR
+Clermont-Ferrand;45.78;3.08;FR
+Saint-Étienne|Saint-Etienne;45.44;4.39;FR
+Poissy;48.93;2.05;FR
+Flins;48.97;1.87;FR
+Douai;50.37;3.08;FR
+Maubeuge;50.28;3.97;FR
+Caen;49.18;-0.37;FR
+Amiens;49.89;2.30;FR
+Limoges;45.83;1.26;FR
+Perpignan;42.70;2.90;FR
+Toulon;43.12;5.93;FR
+Avignon;43.95;4.81;FR
+Berlin;52.52;13.40;DE
+Hamburg;53.55;9.99;DE
+Munich|München|Muenchen;48.14;11.58;DE
+Cologne|Köln|Koeln;50.94;6.96;DE
+Frankfurt|Frankfurt am Main;50.11;8.68;DE
+Stuttgart;48.78;9.18;DE
+Düsseldorf|Duesseldorf;51.23;6.78;DE
+Dortmund;51.51;7.47;DE
+Essen;51.46;7.01;DE
+Leipzig;51.34;12.37;DE
+Bremen;53.08;8.80;DE
+Bremerhaven;53.55;8.58;DE
+Emden;53.37;7.21;DE
+Cuxhaven;53.86;8.69;DE
+Dresden;51.05;13.74;DE
+Hanover|Hannover;52.37;9.73;DE
+Nuremberg|Nürnberg|Nuernberg;49.45;11.08;DE
+Duisburg;51.43;6.76;DE
+Bochum;51.48;7.22;DE
+Wuppertal;51.26;7.15;DE
+Bielefeld;52.02;8.53;DE
+Bonn;50.74;7.10;DE
+Münster|Muenster;51.96;7.63;DE
+Mannheim;49.49;8.47;DE
+Karlsruhe;49.01;8.40;DE
+Augsburg;48.37;10.90;DE
+Wiesbaden;50.08;8.24;DE
+Mainz;50.00;8.27;DE
+Aachen;50.78;6.08;DE
+Kiel;54.32;10.13;DE
+Lübeck|Luebeck;53.87;10.69;DE
+Rostock;54.09;12.10;DE
+Wolfsburg;52.42;10.79;DE
+Braunschweig|Brunswick;52.27;10.52;DE
+Ingolstadt;48.77;11.43;DE
+Regensburg;49.01;12.10;DE
+Dingolfing;48.63;12.50;DE
+Zwickau;50.72;12.49;DE
+Kassel;51.31;9.48;DE
+Freiburg;47.99;7.84;DE
+Ulm;48.40;9.99;DE
+Heilbronn;49.14;9.22;DE
+Neckarsulm;49.19;9.22;DE
+Sindelfingen;48.71;9.00;DE
+Rastatt;48.86;8.20;DE
+Saarbrücken|Saarbruecken;49.24;6.99;DE
+Saarlouis;49.31;6.75;DE
+Erfurt;50.98;11.03;DE
+Magdeburg;52.13;11.63;DE
+Chemnitz;50.83;12.92;DE
+Würzburg|Wuerzburg;49.79;9.95;DE
+Osnabrück|Osnabrueck;52.28;8.05;DE
+Kaiserslautern;49.44;7.77;DE
+Koblenz;50.36;7.59;DE
+Trier;49.75;6.64;DE
+Passau;48.57;13.43;DE
+Rosenheim;47.86;12.12;DE
+Salzgitter;52.15;10.33;DE
+Eisenach;50.98;10.32;DE
+Göttingen|Goettingen;51.54;9.93;DE
+Paderborn;51.72;8.75;DE
+Mönchengladbach|Moenchengladbach;51.19;6.44;DE
+Krefeld;51.34;6.56;DE
+Kempten;47.73;10.31;DE
+Landshut;48.54;12.15;DE
+Leer;53.23;7.45;DE
+Vienna|Wien;48.21;16.37;AT
+Graz;47.07;15.44;AT
+Linz;48.31;14.29;AT
+Salzburg;47.81;13.04;AT
+Innsbruck;47.27;11.40;AT
+Klagenfurt;46.62;14.31;AT
+Steyr;48.04;14.42;AT
+Zurich|Zürich;47.38;8.54;CH
+Basel|Bâle;47.56;7.59;CH
+Geneva|Genève|Geneve|Genf;46.20;6.14;CH
+Bern|Berne;46.95;7.45;CH
+Lausanne;46.52;6.63;CH
+Lugano;46.00;8.95;CH
+Lucerne|Luzern;47.05;8.31;CH
+Rome|Roma;41.90;12.50;IT
+Milan|Milano;45.46;9.19;IT
+Turin|Torino;45.07;7.69;IT
+Naples|Napoli;40.85;14.27;IT
+Genoa|Genova;44.41;8.93;IT
+Bologna;44.49;11.34;IT
+Florence|Firenze;43.77;11.26;IT
+Venice|Venezia;45.44;12.32;IT
+Mestre;45.49;12.24;IT
+Verona;45.44;10.99;IT
+Mantua|Mantova;45.16;10.79;IT
+Brescia;45.54;10.21;IT
+Bergamo;45.70;9.67;IT
+Castiglione delle Stiviere;45.39;10.49;IT
+Padua|Padova;45.41;11.88;IT
+Vicenza;45.55;11.55;IT
+Treviso;45.67;12.24;IT
+Trento;46.07;11.12;IT
+Bolzano|Bozen;46.50;11.35;IT
+Udine;46.06;13.24;IT
+Trieste;45.65;13.78;IT
+Modena;44.65;10.93;IT
+Parma;44.80;10.33;IT
+Reggio Emilia;44.70;10.63;IT
+Piacenza;45.05;9.69;IT
+Cremona;45.13;10.02;IT
+Ferrara;44.84;11.62;IT
+Ravenna;44.42;12.20;IT
+Rimini;44.06;12.57;IT
+Ancona;43.62;13.52;IT
+Pesaro;43.91;12.91;IT
+Perugia;43.11;12.39;IT
+Livorno;43.55;10.31;IT
+Pisa;43.72;10.40;IT
+Civitavecchia;42.09;11.80;IT
+Pescara;42.46;14.21;IT
+Atessa;42.07;14.45;IT
+Bari;41.12;16.87;IT
+Taranto;40.47;17.24;IT
+Melfi;40.99;15.65;IT
+Cassino;41.49;13.83;IT
+Pomigliano d'Arco|Pomigliano;40.91;14.39;IT
+Salerno;40.68;14.77;IT
+Gioia Tauro;38.42;15.90;IT
+Reggio Calabria;38.11;15.65;IT
+Palermo;38.12;13.36;IT
+Catania;37.50;15.09;IT
+Cagliari;39.22;9.12;IT
+Novara;45.45;8.62;IT
+Como;45.81;9.08;IT
+Varese;45.82;8.83;IT
+Alessandria;44.91;8.61;IT
+Asti;44.90;8.21;IT
+Cuneo;44.39;7.55;IT
+La Spezia;44.10;9.82;IT
+Monza;45.58;9.27;IT
+Pavia;45.19;9.16;IT
+Rovigo;45.07;11.79;IT
+Latina;41.47;12.90;IT
+Frosinone;41.64;13.35;IT
+Foggia;41.46;15.55;IT
+Lecce;40.35;18.17;IT
+Madrid;40.42;-3.70;ES
+Barcelona;41.39;2.17;ES
+Valencia;39.47;-0.38;ES
+Seville|Sevilla;37.39;-5.98;ES
+Zaragoza|Saragossa;41.65;-0.88;ES
+Bilbao;43.26;-2.93;ES
+Vigo;42.24;-8.72;ES
+Martorell;41.47;1.93;ES
+Pamplona;42.81;-1.64;ES
+Valladolid;41.65;-4.72;ES
+Málaga|Malaga;36.72;-4.42;ES
+Santander;43.46;-3.80;ES
+Tarragona;41.12;1.25;ES
+Murcia;37.99;-1.13;ES
+Alicante;38.35;-0.48;ES
+Vitoria-Gasteiz|Vitoria;42.85;-2.67;ES
+Burgos;42.34;-3.70;ES
+Girona|Gerona;41.98;2.82;ES
+A Coruña|La Coruña|Coruna;43.36;-8.41;ES
+Algeciras;36.13;-5.45;ES
+Sagunto;39.68;-0.27;ES
+Lisbon|Lisboa;38.72;-9.14;PT
+Porto|Oporto;41.15;-8.61;PT
+Setúbal|Setubal;38.52;-8.89;PT
+Palmela;38.57;-8.90;PT
+Braga;41.55;-8.42;PT
+Mangualde;40.60;-7.76;PT
+London;51.51;-0.13;GB
+Southampton;50.91;-1.40;GB
+Portbury;51.47;-2.72;GB
+Bristol;51.45;-2.59;GB
+Birmingham;52.49;-1.89;GB
+Manchester;53.48;-2.24;GB
+Liverpool;53.41;-2.98;GB
+Leeds;53.80;-1.55;GB
+Sheffield;53.38;-1.47;GB
+Newcastle;54.98;-1.61;GB
+Sunderland;54.91;-1.38;GB
+Glasgow;55.86;-4.25;GB
+Edinburgh;55.95;-3.19;GB
+Dover;51.13;1.31;GB
+Folkestone;51.08;1.17;GB
+Purfleet;51.48;0.24;GB
+Sheerness;51.44;0.76;GB
+Immingham;53.61;-0.22;GB
+Grimsby;53.57;-0.08;GB
+Hull;53.74;-0.33;GB
+Swindon;51.56;-1.78;GB
+Oxford;51.75;-1.26;GB
+Coventry;52.41;-1.51;GB
+Derby;52.92;-1.48;GB
+Nottingham;52.95;-1.15;GB
+Leicester;52.64;-1.13;GB
+Cardiff;51.48;-3.18;GB
+Harwich;51.94;1.28;GB
+Felixstowe;51.96;1.35;GB
+Crewe;53.10;-2.44;GB
+Halewood;53.36;-2.83;GB
+Ellesmere Port;53.28;-2.90;GB
+Norwich;52.63;1.30;GB
+Cambridge;52.21;0.12;GB
+Reading;51.45;-0.97;GB
+Milton Keynes;52.04;-0.76;GB
+Belfast;54.60;-5.93;GB
+Dublin;53.35;-6.26;IE
+Cork;51.90;-8.47;IE
+Copenhagen|København|Kobenhavn;55.68;12.57;DK
+Aarhus|Århus;56.16;10.20;DK
+Odense;55.40;10.39;DK
+Køge|Koge;55.46;12.18;DK
+Esbjerg;55.48;8.45;DK
+Aalborg;57.05;9.92;DK
+Padborg;54.83;9.36;DK
+Stockholm;59.33;18.07;SE
+Gothenburg|Göteborg|Goteborg;57.71;11.97;SE
+Malmö|Malmo;55.60;13.00;SE
+Södertälje|Sodertalje;59.20;17.63;SE
+Trollhättan|Trollhattan;58.28;12.29;SE
+Helsingborg;56.05;12.69;SE
+Uppsala;59.86;17.64;SE
+Jönköping|Jonkoping;57.78;14.16;SE
+Oslo;59.91;10.75;NO
+Drammen;59.74;10.20;NO
+Bergen;60.39;5.32;NO
+Helsinki;60.17;24.94;FI
+Hanko;59.82;22.97;FI
+Uusikaupunki;60.80;21.41;FI
+Turku;60.45;22.27;FI
+Warsaw|Warszawa;52.23;21.01;PL
+Kraków|Krakow|Cracow;50.06;19.94;PL
+Wrocław|Wroclaw;51.11;17.03;PL
+Poznań|Poznan;52.41;16.93;PL
+Gdańsk|Gdansk;54.35;18.65;PL
+Gdynia;54.52;18.53;PL
+Szczecin;53.43;14.55;PL
+Łódź|Lodz;51.76;19.46;PL
+Katowice;50.26;19.02;PL
+Gliwice;50.29;18.67;PL
+Tychy;50.12;18.99;PL
+Bielsko-Biała|Bielsko-Biala;49.82;19.04;PL
+Lublin;51.25;22.57;PL
+Rzeszów|Rzeszow;50.04;22.00;PL
+Białystok|Bialystok;53.13;23.16;PL
+Bydgoszcz;53.12;18.01;PL
+Toruń|Torun;53.01;18.60;PL
+Września|Wrzesnia;52.33;17.57;PL
+Prague|Praha;50.08;14.44;CZ
+Brno;49.20;16.61;CZ
+Ostrava;49.82;18.26;CZ
+Plzeň|Plzen|Pilsen;49.74;13.38;CZ
+Mladá Boleslav|Mlada Boleslav;50.41;14.90;CZ
+Kolín|Kolin;50.03;15.20;CZ
+Kvasiny;50.21;16.27;CZ
+Nošovice|Nosovice;49.66;18.43;CZ
+Liberec;50.77;15.06;CZ
+Olomouc;49.59;17.25;CZ
+České Budějovice|Ceske Budejovice;48.97;14.47;CZ
+Bratislava;48.15;17.11;SK
+Trnava;48.38;17.59;SK
+Žilina|Zilina;49.22;18.74;SK
+Nitra;48.31;18.09;SK
+Košice|Kosice;48.72;21.26;SK
+Budapest;47.50;19.04;HU
+Győr|Gyor;47.69;17.63;HU
+Kecskemét|Kecskemet;46.91;19.69;HU
+Esztergom;47.79;18.74;HU
+Debrecen;47.53;21.63;HU
+Szeged;46.25;20.15;HU
+Szentgotthárd|Szentgotthard;46.95;16.27;HU
+Ljubljana;46.06;14.51;SI
+Koper|Capodistria;45.55;13.73;SI
+Novo Mesto;45.80;15.17;SI
+Maribor;46.55;15.65;SI
+Zagreb;45.81;15.98;HR
+Rijeka;45.33;14.44;HR
+Split;43.51;16.44;HR
+Bucharest|București|Bucuresti;44.43;26.10;RO
+Pitești|Pitesti;44.86;24.87;RO
+Mioveni;44.96;24.94;RO
+Craiova;44.32;23.80;RO
+Cluj-Napoca|Cluj;46.77;23.59;RO
+Timișoara|Timisoara;45.75;21.23;RO
+Constanța|Constanta;44.18;28.63;RO
+Arad;46.18;21.31;RO
+Brașov|Brasov;45.65;25.61;RO
+Iași|Iasi;47.16;27.59;RO
+Sofia;42.70;23.32;BG
+Plovdiv;42.14;24.75;BG
+Varna;43.21;27.91;BG
+Burgas;42.50;27.47;BG
+Belgrade|Beograd;44.79;20.45;RS
+Kragujevac;44.01;20.91;RS
+Novi Sad;45.27;19.83;RS
+Athens|Athina;37.98;23.73;GR
+Piraeus|Pireas;37.94;23.65;GR
+Thessaloniki;40.64;22.94;GR
+Vilnius;54.69;25.28;LT
+Kaunas;54.90;23.90;LT
+Klaipėda|Klaipeda;55.70;21.14;LT
+Riga;56.95;24.11;LV
+Tallinn;59.44;24.75;EE
+Istanbul;41.01;28.98;TR
+Bursa;40.19;29.06;TR
+Izmit|Kocaeli;40.77;29.92;TR`;
+const normTxt = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+const CITIES = CITY_SRC.split("\n").map(l => { const [n,lat,lon,cc] = l.split(";"); const names = n.split("|"); return {name:names[0], aliases:[...new Set(names.map(normTxt))], lat:+lat, lon:+lon, cc}; });
+const cityCache = {};
+function matchCity(text){ // the city named last in the text wins (a street like "Via Roma" comes before the town)
+  const t = " "+normTxt(text)+" "; if(t.trim()==="") return null; if(t in cityCache) return cityCache[t];
+  let best = null, bestEnd = -1, bestLen = 0;
+  CITIES.forEach(c => c.aliases.forEach(a => { const i = t.lastIndexOf(" "+a+" "); if(i<0) return; const end = i+a.length; if(end>bestEnd || (end===bestEnd && a.length>bestLen)){ best = c; bestEnd = end; bestLen = a.length; } }));
+  return cityCache[t] = best;
+}
+function coordsOf(locId){
+  const l = get("locations", locId); if(!l) return null;
+  if(l.lat!=="" && l.lat!=null && l.lon!=="" && l.lon!=null && !isNaN(+l.lat) && !isNaN(+l.lon)) return {lat:+l.lat, lon:+l.lon, how:"your coordinates"};
+  const c = matchCity([l.name, l.address, l.country].filter(Boolean).join(" , "));
+  return c ? {lat:c.lat, lon:c.lon, how:c.name} : null;
+}
+function crowKm(a, b){ const R = 6371, rad = x => x*Math.PI/180, dLat = rad(b.lat-a.lat), dLon = rad(b.lon-a.lon);
+  const h = Math.sin(dLat/2)**2 + Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
+const roadFactor = () => +F().cost.roadFactor || 1.22;
+function estKm(pa, pb){ if(!pa || !pb) return null; const c = crowKm(pa, pb); return {km: Math.max(1, Math.round(c*roadFactor()/5)*5), crow: Math.round(c)}; }
+// best distance we have: your saved one, else an expected one from coordinates
+function distInfo(a, b){
+  const s = dist(a, b); if(s!=null) return {km:s, saved:true, text:"your saved distance"};
+  const pa = coordsOf(a), pb = coordsOf(b), e = estKm(pa, pb);
+  if(!e) return {km:null, text:`no location found for ${!pa?locName(a):locName(b)}: add a town to its address`};
+  return {km:e.km, est:true, text:`expected: ${e.crow} km straight line (${pa.how} → ${pb.how}) × ${roadFactor()} road factor`};
+}
 
 /* ================= PDF (plain text + JPEG images, no library) ================= */
 const W1252 = {"€":128,"‚":130,"„":132,"…":133,"‘":145,"’":146,"“":147,"”":148,"•":149,"–":150,"—":151,"™":153};
@@ -1208,6 +1641,7 @@ function loadDemo(){
   [[weber,{priceMode:"km", rateKm:0.34, minPrice:150}],[rossi,{fuelClause:false}]].forEach(([id,x]) => put("customers", Object.assign(clone(get("customers",id)), x), true));
   const L = (name, type, country, address, hours) => put("locations", {name, type, country, address, hours}, true).id;
   const zee = L("Zeebrugge port compound","Port","Belgium","Zeebrugge port, 8380 Brugge","Mon–Fri 06:00–22:00, Sat 06:00–14:00"), ant = L("Antwerp vehicle terminal","Port","Belgium","Antwerp port, 2030 Antwerpen","24/7"), mn = L("Mantova compound","Compound","Italy","Strada Cipata, 46100 Mantova","Mon–Fri 07:00–18:00");
+  { const z = clone(get("locations",zee)); z.lat = "51.3330"; z.lon = "3.2050"; put("locations", z, true); }
   const wm = L("Autohaus Weber München","Dealer","Germany","Leopoldstraße 50, 80802 München","Mon–Fri 08:00–18:00, key box after hours"), wa = L("Autohaus Weber Augsburg","Dealer","Germany","Haunstetter Str. 21, 86161 Augsburg","Mon–Fri 08:00–18:00");
   const dl = L("Garage Dupont Liège","Dealer","Belgium","Rue de Liège 8, 4000 Liège","Mon–Sat 08:30–18:00"), rv = L("Concessionaria Rossi Verona","Dealer","Italy","Viale del Lavoro 3, 37135 Verona","Mon–Sat 08:30–19:00"), rb = L("Concessionaria Rossi Brescia","Dealer","Italy","Via Triumplina 40, 25123 Brescia","Mon–Sat 08:30–19:00");
   const fin = F(); fin.diesel = {base:1.48, current:1.55, share:30, history:[{date:addDays(T,-14),price:1.52},{date:addDays(T,-7),price:1.53},{date:T,price:1.55}]};
