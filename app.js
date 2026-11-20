@@ -14,6 +14,11 @@ const money = (n, cur) => { const c = cur || (S().currency||"EUR"); try{ return 
 const sum = (a, f) => a.reduce((t,x)=>t+(+f(x)||0),0);
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast.h); toast.h=setTimeout(()=>t.hidden=true,2600); }
 function vinOK(v){ return /^[A-HJ-NPR-Z0-9]{17}$/.test(String(v||"").toUpperCase()); }
+// a car is identified by its VIN or, when there is none, by its licence plate
+const idClean = v => String(v||"").toUpperCase().replace(/[\s\-.·]/g,"");
+const idType = v => idClean(v).length===17 ? "VIN" : "Plate";
+const idTag = v => v ? idType(v)+" "+v : "";
+function idWarn(v){ const c = idClean(v); if(!c) return ""; if(c.length===17) return vinOK(c) ? "" : "check VIN"; if(c.length>10) return "check: too long for a plate, too short for a VIN"; return ""; }
 
 /* ================= car catalogue (shared with the load planner) ================= */
 const CARS = (window.CAR_DB||[]).filter(d => !(d[6]==="Pickup" || (d[6]==="Van" && d[1]>=4.9)));
@@ -224,7 +229,7 @@ R.home = () => {
     <div><h2>Trips today and on the road</h2>${tripCards(trips.filter(t => t.date===todayISO() || tStatus(t)[0]==="On the road").slice(0,4), true) || `<div class="empty">No trips today. <a href="#trips">See all trips</a></div>`}</div>
   </div>
   <section class="sec"><h2>Modules</h2><div class="tiles">
-    ${[["orders","Orders","Every car by VIN, from release to invoice"],["trips","Trips","Group cars on a truck, set stops and driver"],["planner","Load planner","Which car goes where on the truck"],["handover","Handover","Photos, damage and signature at pickup and delivery"],["ecmr","eCMR","Consignment notes made from the handovers"],["invoices","Invoices","Bill delivered cars with proof attached"],["finance","Finance","Per-km prices, fuel surcharge, costs and margin"],["fleet","Fleet & drivers","Trucks, trailers, documents and expiry dates"],["customers","Customers & places","Customers, prices, compounds and dealers"],["settings","Settings","Company details, backup and demo data"]]
+    ${[["orders","Orders","Every car by VIN or plate, from release to invoice"],["trips","Trips","Group cars on a truck, set stops and driver"],["planner","Load planner","Which car goes where on the truck"],["handover","Handover","Photos, damage and signature at pickup and delivery"],["ecmr","eCMR","Consignment notes made from the handovers"],["invoices","Invoices","Bill delivered cars with proof attached"],["finance","Finance","Per-km prices, fuel surcharge, costs and margin"],["fleet","Fleet & drivers","Trucks, trailers, documents and expiry dates"],["customers","Customers & places","Customers, prices, compounds and dealers"],["settings","Settings","Company details, backup and demo data"]]
       .map(t => `<a class="tile" href="#${t[0]}">${icon(t[0])}<div><b>${t[1]}</b><span>${t[2]}</span></div></a>`).join("")}
   </div></section>`;
 };
@@ -254,14 +259,14 @@ R.orders = () => {
     <div class="chips">${[["all","All",os.length]].concat(Object.keys(OSTAT).map(k=>[k,OSTAT[k][0],cnt(k)])).map(c=>`<button class="fchip ${orderFilter.st===c[0]?"on":""}" data-st="${c[0]}">${c[1]} · ${c[2]}</button>`).join("")}</div>
   </div>
   <div class="tools">
-    <input class="inp" id="oq" style="max-width:300px" placeholder="Filter by VIN, model, place…" value="${esc(orderFilter.q)}">
+    <input class="inp" id="oq" style="max-width:300px" placeholder="Filter by VIN, plate, model, place…" value="${esc(orderFilter.q)}">
     <select class="inp" id="ocust" style="max-width:240px">${opt("","All customers",orderFilter.cust)}${list("customers").map(c=>opt(c.id,c.name,orderFilter.cust)).join("")}</select>
     ${nSel ? `<span class="hint">${nSel} selected</span><button class="btn sm" data-act="release">Mark released</button><button class="btn sm pri" data-act="totrip">Put on a new trip</button><button class="btn sm" data-act="unsel">Clear selection</button>` : `<span class="hint">Tick orders to release them or put them on a trip</span>`}
   </div>
-  ${rows.length ? `<div class="tw"><table class="stack"><thead><tr><th><input type="checkbox" id="oall" aria-label="Select all shown"></th><th>VIN</th><th>Car</th><th>Customer</th><th>From → to</th><th>Ready</th><th>Due</th><th class="num">Price</th><th>Status</th></tr></thead><tbody>
+  ${rows.length ? `<div class="tw"><table class="stack"><thead><tr><th><input type="checkbox" id="oall" aria-label="Select all shown"></th><th>VIN / plate</th><th>Car</th><th>Customer</th><th>From → to</th><th>Ready</th><th>Due</th><th class="num">Price</th><th>Status</th></tr></thead><tbody>
     ${rows.map(o => { const st = oStatus(o), late = !o.deliveredAt && o.due && daysTo(o.due)<0;
       return `<tr class="click" data-o="${o.id}"><td><input type="checkbox" data-sel="${o.id}" ${orderFilter.sel.has(o.id)?"checked":""} aria-label="Select ${esc(o.vin)}"></td>
-      <td class="vin">${esc(o.vin||"–")}${o.vin && !vinOK(o.vin)?' <span class="st warn">check</span>':""}</td>
+      <td class="vin">${esc(o.vin||"–")}${o.vin && idType(o.vin)==="Plate"?' <span class="tag">plate</span>':""}${idWarn(o.vin)?' <span class="st warn">check</span>':""}</td>
       <td>${esc(shortModel(o.model)||o.modelText||"–")}${o.model?"":' <span class="st warn">unknown model</span>'}${o.nonRunner?' <span class="tag">non-runner</span>':""}</td>
       <td>${esc(custName(o.customer))}</td><td>${esc(locName(o.from))} → ${esc(locName(o.to))}</td>
       <td class="nowrap">${fDate(o.ready)}</td><td class="nowrap">${late?`<span class="st bad">${fDate(o.due)}</span>`:fDate(o.due)}</td>
@@ -298,7 +303,7 @@ function orderForm(id){
   openModal(id ? `Order ${o.vin||o.ref||""}` : "New order", `
     ${id ? `<p style="margin-top:-6px">${pill(st)} <span class="hint">${tl}</span>${o.trip&&get("trips",o.trip)?` · <a href="#trip-${o.trip}" data-close>Trip ${esc(get("trips",o.trip).name)}</a>`:""}${o.invoice&&get("invoices",o.invoice)?` · Invoice ${esc(get("invoices",o.invoice).number)}`:""}</p>`:""}
     <form id="of" class="grid2" autocomplete="off">
-      <label class="f">VIN (17 characters)<input name="vin" value="${esc(o.vin||"")}" maxlength="17" style="text-transform:uppercase;letter-spacing:.04em" placeholder="e.g. WVWZZZCDZMW012345"><span class="hint" id="vinmsg"></span></label>
+      <label class="f">VIN or licence plate<input name="vin" value="${esc(o.vin||"")}" maxlength="20" style="text-transform:uppercase;letter-spacing:.04em" placeholder="VIN (17 characters) or plate, e.g. 1-ABC-234"><span class="hint" id="vinmsg"></span></label>
       ${fld("Customer reference","ref",o.ref)}
       ${modelPicker(o.model)}
       ${o.modelText && !o.model ? `<p class="note pk span2">Imported as “${esc(o.modelText)}”: pick the matching model so the load planner knows its size.</p>`:""}
@@ -320,7 +325,7 @@ function orderForm(id){
     root => {
       bindModelPicker(root);
       const f = root.querySelector("#of");
-      const vchk = () => { const v = f.vin.value.toUpperCase(); $("vinmsg").textContent = !v ? "" : vinOK(v) ? "✓ Looks like a valid VIN" : v.length!==17 ? `${v.length} of 17 characters` : "VINs never use I, O or Q: check it"; };
+      const vchk = () => { const v = f.vin.value, c = idClean(v), w = idWarn(v); $("vinmsg").textContent = !c ? "No VIN? Use the licence plate." : c.length===17 ? (w ? "VINs never use I, O or Q: check it" : "✓ Looks like a valid VIN") : w ? `${c.length} characters: ${w}` : "✓ Saved as a licence plate"; };
       f.vin.oninput = vchk; vchk();
       f.model.onchange = () => { const i = CARINFO[f.model.value]; $("carinfo").textContent = i?`Length ${i.len} m · height ${i.h} m · ${i.kg} kg (approximate database specs)`:""; };
       let manual = !!(id && o.price && (()=>{ const p = priceFor(o); return !p || p.price!==+o.price; })());
@@ -337,7 +342,7 @@ function orderForm(id){
       reprice(); kmHow();
       $("osave").onclick = () => {
         const v = formVals(f); delete v.brand;
-        if(!v.vin && !v.ref){ toast("Add a VIN or a reference"); return; }
+        if(!v.vin && !v.ref){ toast("Add a VIN, a licence plate or a reference"); return; }
         Object.assign(o, v, {vin:v.vin.toUpperCase(), price:+v.price||0, value:+v.value||0, km:+v.km||0});
         if(o.km && o.from && o.to && dist(o.from,o.to)==null && o.km!==kmExp) setDist(o.from, o.to, o.km);
         if(v.model) delete o.modelText;
@@ -351,7 +356,7 @@ function orderForm(id){
 function importOrders(){
   openModal("Import orders", `
     <p>Paste one car per line, columns separated by a semicolon, tab or comma (copy straight from Excel works):</p>
-    <p class="note"><b>VIN ; Model ; Customer ; Pick up at ; Deliver to ; Ready date ; Deliver by ; Price</b><br><span class="hint">Example: WVWZZZCDZMW012345 ; VW Golf Mk8 ; Autohaus Weber ; Zeebrugge port ; Autohaus Weber München ; 2026-11-20 ; 2026-11-24 ; 185</span></p>
+    <p class="note"><b>VIN or plate ; Model ; Customer ; Pick up at ; Deliver to ; Ready date ; Deliver by ; Price</b><br><span class="hint">Example: WVWZZZCDZMW012345 ; VW Golf Mk8 ; Autohaus Weber ; Zeebrugge port ; Autohaus Weber München ; 2026-11-20 ; 2026-11-24 ; 185</span></p>
     <label class="f">Your list<textarea id="imp" style="min-height:180px;font-size:14px"></textarea></label>
     <label class="chk"><input type="checkbox" id="imprel" checked> Mark them released</label>
     <p class="hint" id="impmsg">Unknown customers and places are created for you. Models are matched to the car database; anything not matched is flagged so you can pick it.</p>`,
@@ -590,7 +595,7 @@ function addCars(id){
   const froms = [...new Set(avail.map(o=>o.from))];
   openModal("Add cars to "+t.name, `
     ${avail.length ? `<div class="tools"><select class="inp" id="afrom" style="max-width:280px">${opt("","All pickup places","")}${froms.map(f=>opt(f,locName(f),"")).join("")}</select><label class="chk"><input type="checkbox" id="aonly" checked> Released only</label></div>
-    <div class="tw"><table><thead><tr><th></th><th>VIN</th><th>Car</th><th>From → to</th><th>Due</th></tr></thead><tbody id="alist"></tbody></table></div>
+    <div class="tw"><table><thead><tr><th></th><th>VIN / plate</th><th>Car</th><th>From → to</th><th>Due</th></tr></thead><tbody id="alist"></tbody></table></div>
     <p class="hint" id="acount"></p>` : `<div class="empty">No cars waiting. Add orders first.</div>`}`,
     `<button class="btn" data-close>Cancel</button><button class="btn pri" id="ago">Add to trip</button>`,
     () => {
@@ -623,7 +628,7 @@ function sendTrip(reset){
   const t = planTrip && get("trips",planTrip), fr = $("lpframe"); if(!t || !fr || !fr.contentWindow) return;
   const truck = get("trucks",t.truck)||{}, keep = {};
   if(!reset) (t.lpCars||[]).forEach(c => { if(c.ord) keep[c.ord] = c; });
-  const cars = tripOrders(t).map(o => ({ord:o.id, model:o.model||o.modelText||"", stop:stopNo(t,o), keep: keep[o.id] && keep[o.id].model===o.model ? keep[o.id] : null}));
+  const cars = tripOrders(t).map(o => ({ord:o.id, vin:o.vin||"", model:o.model||o.modelText||"", stop:stopNo(t,o), keep: keep[o.id] && keep[o.id].model===o.model ? keep[o.id] : null}));
   const extra = [truck.plate ? truckName(t.truck) : "", t.driver ? drvName(t.driver) : ""].filter(Boolean).join(" · ");
   fr.contentWindow.postMessage({type:"lp-load", trip:t.id, name:t.name, profile:truck.profile||"eurolohr200-low", route:t.route||"base", cars, extra, pdf:planPdf}, "*"); planPdf = false;
 }
@@ -709,7 +714,7 @@ function hoCar(o, i, del){
       <div><h3>${i+1}. ${esc(shortModel(o.model)||o.modelText)}${pos?` <span class="tag">${esc(pos)}</span>`:""}</h3><p class="hint" style="margin:2px 0 0">${esc(custName(o.customer))} · to ${esc(locName(o.to))}${o.nonRunner?" · non-runner":""}${o.notes?" · "+esc(o.notes):""}</p></div>
       <label class="chk"><input type="checkbox" data-on="${o.id}" ${c.on?"checked":""}> Include this car</label>
     </div>
-    ${c.on ? `<label class="chk" style="font-size:17px"><input type="checkbox" data-vin="${o.id}" ${c.vin?"checked":""}> VIN on the car matches <b class="vin" style="letter-spacing:.06em">${esc(o.vin)}</b></label>
+    ${c.on ? `<label class="chk" style="font-size:17px"><input type="checkbox" data-vin="${o.id}" ${c.vin?"checked":""}> ${idType(o.vin)==="VIN"?"VIN":"Licence plate"} on the car matches <b class="vin" style="letter-spacing:.06em">${esc(o.vin||"–")}</b></label>
     <div class="hgrid">
       <div>
         <svg class="carsvg" viewBox="0 0 120 236" role="group" aria-label="Car seen from above, front at the top. Tap where the damage is.">
@@ -773,7 +778,7 @@ R.after_handover = id => {
     const t = get("trips",id), st = stopsFor(t).find(x => x.key===hoDraft.key); if(!st){ toast("This stop is already done"); return; }
     const on = st.orders.filter(o => hoDraft.checks[o.id].on);
     if(!on.length){ toast("No cars included"); return; }
-    const noVin = on.filter(o => !hoDraft.checks[o.id].vin); if(noVin.length){ toast(`Tick the VIN check for ${noVin.length} car${noVin.length>1?"s":""}`); m.querySelector(`[data-car="${noVin[0].id}"]`).scrollIntoView({behavior:"smooth",block:"center"}); return; }
+    const noVin = on.filter(o => !hoDraft.checks[o.id].vin); if(noVin.length){ toast(`Tick the VIN / plate check for ${noVin.length} car${noVin.length>1?"s":""}`); m.querySelector(`[data-car="${noVin[0].id}"]`).scrollIntoView({behavior:"smooth",block:"center"}); return; }
     if(hoDraft.unattended){ const np = on.filter(o => !hoDraft.checks[o.id].photos.length); if(np.length){ toast("Unattended delivery: add photos of every car"); m.querySelector(`[data-car="${np[0].id}"]`).scrollIntoView({behavior:"smooth",block:"center"}); return; } }
     else { if(!hoDraft.name.trim()){ toast("Add the name of the person "+(st.kind==="delivery"?"receiving":"handing over")); $("hname").focus(); return; } if(!hoDraft.sig){ toast("Ask for a signature"); return; } }
     const now = Date.now();
@@ -1474,10 +1479,10 @@ R.after_ecmr = () => {
 };
 function ecmrFields(c){
   const co = S().company, cu = get("customers",c.customer)||{}, F = get("locations",c.from)||{}, T = get("locations",c.to)||{}, trk = get("trucks",c.trip.truck)||{};
-  const goods = c.orders.map(o => `${o.vin}  ${shortModel(o.model)||o.modelText}${CARINFO[o.model]?"  ·  "+CARINFO[o.model].kg+" kg":""}${o.nonRunner?"  ·  non-runner":""}`).join("\n");
+  const goods = c.orders.map(o => `${idTag(o.vin)}  ${shortModel(o.model)||o.modelText}${CARINFO[o.model]?"  ·  "+CARINFO[o.model].kg+" kg":""}${o.nonRunner?"  ·  non-runner":""}`).join("\n");
   const kg = sum(c.orders, o => (CARINFO[o.model]||{}).kg);
-  const resP = c.orders.flatMap(o => (o.dmgPickup||[]).map(d => `${o.vin.slice(-6)}: ${zoneName(d.zone)}, ${d.type.toLowerCase()}, ${d.sev.split(" (")[0].toLowerCase()}`));
-  const resD = c.orders.flatMap(o => (o.dmgDelivery||[]).filter(d => !(o.dmgPickup||[]).some(b => b.zone===d.zone && b.type===d.type)).map(d => `${o.vin.slice(-6)}: ${zoneName(d.zone)}, ${d.type.toLowerCase()}, ${d.sev.split(" (")[0].toLowerCase()} (NEW at delivery)`));
+  const resP = c.orders.flatMap(o => (o.dmgPickup||[]).map(d => `${(o.vin||"").slice(-6)}: ${zoneName(d.zone)}, ${d.type.toLowerCase()}, ${d.sev.split(" (")[0].toLowerCase()}`));
+  const resD = c.orders.flatMap(o => (o.dmgDelivery||[]).filter(d => !(o.dmgPickup||[]).some(b => b.zone===d.zone && b.type===d.type)).map(d => `${(o.vin||"").slice(-6)}: ${zoneName(d.zone)}, ${d.type.toLowerCase()}, ${d.sev.split(" (")[0].toLowerCase()} (NEW at delivery)`));
   return [
     ["1 Sender", `${cu.name||""}\n${cu.address||""}${cu.country?"\n"+cu.country:""}`],
     ["2 Consignee", `${T.name||""}\n${T.address||""}${T.country?"\n"+T.country:""}`],
@@ -1543,8 +1548,8 @@ R.after_invoices = () => {
 function makeInvoice(cid){
   const os = list("orders").filter(o => oStatus(o)==="del" && (o.customer||"")===cid), s = clone(S()), cu = get("customers",cid)||{};
   if(!os.length) return;
-  const lines = os.map(o => ({order:o.id, desc:`Transport ${shortModel(o.model)||o.modelText} · VIN ${o.vin} · ${locName(o.from)} → ${locName(o.to)} · delivered ${fDate(new Date(o.deliveredAt).toISOString())}`, qty:1, price:+o.price||0}));
-  if(os.some(o=>o.nonRunner)) os.filter(o=>o.nonRunner).forEach(o => lines.push({desc:`Non-runner surcharge · VIN ${o.vin}`, qty:1, price:25}));
+  const lines = os.map(o => ({order:o.id, desc:`Transport ${shortModel(o.model)||o.modelText} · ${idTag(o.vin)} · ${locName(o.from)} → ${locName(o.to)} · delivered ${fDate(new Date(o.deliveredAt).toISOString())}`, qty:1, price:+o.price||0}));
+  if(os.some(o=>o.nonRunner)) os.filter(o=>o.nonRunner).forEach(o => lines.push({desc:`Non-runner surcharge · ${idTag(o.vin)}`, qty:1, price:25}));
   const fs = r2(sum(os, surchargeOf)); if(fs) lines.push({desc:fuelText(), qty:1, price:fs});
   const cross = cu.country && S().company.country && cu.country.trim().toLowerCase()!==S().company.country.trim().toLowerCase() && !!cu.vat;
   const inv = put("invoices", {number:(s.invPrefix||"INV-")+String(s.nextInv||1).padStart(4,"0"), customer:cid, date:todayISO(), due:addDays(todayISO(), +(cu.terms??s.terms??30)), lines, vatPct:+s.vat||0, reverse:cross, created:Date.now()}, true);
@@ -1597,7 +1602,7 @@ function invoicePdf(inv){
   d.gap(10); d.text(`Please pay ${money(t.total)} by ${fDate(inv.due)} ${inv.due.slice(0,4)}${co.iban?" to IBAN "+co.iban:""}, quoting ${inv.number}.`, {size:10});
   const os = list("orders").filter(o => o.invoice===inv.id);
   if(os.length){ d.gap(14); d.text("Proof of delivery", {size:11, bold:true});
-    d.table([["VIN",130],["Car",120],["Delivered",95],["Received by",154]], os.map(o => { const h = get("handovers",o.hoDelivery); return [o.vin, shortModel(o.model)||o.modelText||"", o.deliveredAt?fDT(o.deliveredAt):"", h?(h.unattended?"Unattended, photo proof":h.name):""]; })); }
+    d.table([["VIN / plate",130],["Car",120],["Delivered",95],["Received by",154]], os.map(o => { const h = get("handovers",o.hoDelivery); return [o.vin, shortModel(o.model)||o.modelText||"", o.deliveredAt?fDT(o.deliveredAt):"", h?(h.unattended?"Unattended, photo proof":h.name):""]; })); }
   saveFile(d.blob(), fileName(inv.number)+".pdf");
 }
 
@@ -1672,14 +1677,14 @@ function loadDemo(){
   c.forEach((o,i) => { o.trip = trip3.id; o.loadedAt = ago(3); o.hoPickup = h3.id; o.dmgPickup = []; o.deliveredAt = i<2 ? ago(3)+5*36e5 : ago(3)+3*36e5; o.hoDelivery = i<2 ? h5.id : h4.id; o.dmgDelivery = []; put("orders",o,true); });
   // older invoiced cars: one invoice overdue, one paid
   const old = [O("Tesla Model Y Pre-facelift (2020-2025)",dupont,ant,dl,150,{loadedAt:ago(42), deliveredAt:ago(41)}), O("Toyota RAV4 XA50 (2018-2025)",dupont,ant,dl,150,{loadedAt:ago(42), deliveredAt:ago(41)})];
-  const inv1 = put("invoices", {number:"INV-0001", customer:dupont, date:addDays(T,-40), due:addDays(T,-10), sentAt:addDays(T,-40), vatPct:21, reverse:true, created:ago(40), lines:old.map(o=>({order:o.id, desc:`Transport ${shortModel(o.model)} · VIN ${o.vin} · Antwerp vehicle terminal → Garage Dupont Liège`, qty:1, price:150}))}, true);
+  const inv1 = put("invoices", {number:"INV-0001", customer:dupont, date:addDays(T,-40), due:addDays(T,-10), sentAt:addDays(T,-40), vatPct:21, reverse:true, created:ago(40), lines:old.map(o=>({order:o.id, desc:`Transport ${shortModel(o.model)} · ${idTag(o.vin)} · Antwerp vehicle terminal → Garage Dupont Liège`, qty:1, price:150}))}, true);
   old.forEach(o => { o.invoice = inv1.id; put("orders",o,true); });
   const old2 = O("Mercedes-Benz GLC X254 (2022-)",weber,zee,wm,210,{loadedAt:ago(25), deliveredAt:ago(24)});
   const inv2 = put("invoices", {number:"INV-0002", customer:weber, date:addDays(T,-23), due:addDays(T,7), sentAt:addDays(T,-23), paidAt:addDays(T,-2), vatPct:21, reverse:true, created:ago(23), lines:[{order:old2.id, desc:`Transport ${shortModel(old2.model)} · VIN ${old2.vin} · Zeebrugge port compound → Autohaus Weber München`, qty:1, price:210}]}, true);
   old2.invoice = inv2.id; put("orders",old2,true);
   // waiting: released and not released
   O("Tesla Model Y Pre-facelift (2020-2025)",weber,zee,wa,265.2); O("Toyota RAV4 XA50 (2018-2025)",dupont,ant,dl,165);
-  O("Porsche 911 992 (2019-)",weber,zee,wm,260,{released:false, releasedAt:null, value:145000, notes:"Very low car: R6 only"}); O("Kia Sportage NQ5 (2021-)",rossi,mn,rv,120,{released:false, releasedAt:null});
+  O("Porsche 911 992 (2019-)",weber,zee,wm,260,{released:false, releasedAt:null, value:145000, notes:"Very low car: R6 only"}); O("Volvo V60 225 (2018-)",dupont,dl,ant,165,{vin:"1-ABC-234", notes:"Used car, no VIN on the papers yet"}); O("Kia Sportage NQ5 (2021-)",rossi,mn,rv,120,{released:false, releasedAt:null});
   dbEmpty = false; refresh(); toast("Demo data loaded");
 }
 

@@ -294,6 +294,8 @@ BRANDS.forEach(function(b){ CATALOG[b].sort(function(x,y){ return x.localeCompar
 var TFS = 0.40; // height/length ratio from which a car counts as tall for its size (Fiat 500 = 0.42)
 // special sports cars (expensive, very low clearance): if there is only one in the load it goes in R6, the rear lower spot, where it is lowest risk
 var SPORT_RE = /ferrari|lamborghini|mclaren|porsche (911|718|cayman|boxster|carrera)|aston martin|lotus|audi r8|corvette|gt-r|alpine a110|amg gt|maserati (mc20|granturismo)|bentley continental|bmw m8|bugatti|pagani|koenigsegg/i;
+function idShort(v){ v = String(v||""); var c = v.toUpperCase().replace(/[\s\-.]/g,""); return c.length===17 ? "…"+c.slice(-8) : v; }
+function idFull(v){ v = String(v||""); return !v ? "" : (v.toUpperCase().replace(/[\s\-.]/g,"").length===17 ? "VIN " : "Plate ")+v; }
 function isSport(name){ var d = DBINFO[name]; return SPORT_RE.test(name||"") || !!(d && d.gc && d.gc<=110); }
 var SPORTW = 6; // how strongly a single sports car is kept in R6
 function findModel(name){ for(var i=0;i<MODELS.length;i++) if(MODELS[i][0]===name) return MODELS[i]; return null; }
@@ -660,7 +662,7 @@ function leaveBehind(carId){
   sel = null; moveMsg = ""; saveState(); renderCars(); render();
 }
 function autoPlan(){ state.cars.forEach(function(c){ c.pin = ""; c.left = false; }); sel = null; moveMsg = ""; saveState(); renderCars(); render(); }
-function carObj(c, i, prof){ return {n:i+1,id:c.id,pin:c.pin||"",model:c.model,ski:!!c.ski,sport:!!c.sport,len:+c.len||0,h0:+c.h||0,h:(+c.h||0)+(c.ski?prof.skibox:0),kg:+c.kg||0,stop:Math.max(1,Math.round(+c.stop||1))}; }
+function carObj(c, i, prof){ return {n:i+1,id:c.id,vin:c.vin||"",pin:c.pin||"",model:c.model,ski:!!c.ski,sport:!!c.sport,len:+c.len||0,h0:+c.h||0,h:(+c.h||0)+(c.ski?prof.skibox:0),kg:+c.kg||0,stop:Math.max(1,Math.round(+c.stop||1))}; }
 
 /* ---------- rendering ---------- */
 var $ = function(id){ return document.getElementById(id); };
@@ -688,6 +690,7 @@ function renderCars(){
         '<select id="m'+c.id+'" data-k="model" aria-label="Model of car '+(i+1)+'"'+(c.brand?'':' disabled')+'><option value="">'+(c.brand?'Model…':'Pick a brand first')+'</option>'+list.map(function(n){ return '<option value="'+esc(n)+'"'+(n===c.model?' selected':'')+'>'+esc(brandOf(n)===c.brand ? shortName(n) : n)+'</option>'; }).join("")+'</select>'+
         '<button class="x" data-del="'+c.id+'" aria-label="Remove car '+(i+1)+'">✕</button>'+
         '<div class="line2">'+
+          (c.vin?'<span class="hint" style="font-family:var(--mono);white-space:nowrap" title="'+esc(idFull(c.vin))+'">'+esc(c.vin)+'</span>':'')+
           '<span class="hint where" data-where="'+c.id+'" style="font-family:var(--mono);white-space:nowrap">'+(c.left?'Left behind':(placedAt[c.id]?'On '+placedAt[c.id]+(c.pin?' (moved)':''):(c.model?'Not loaded':'')))+'</span>'+
           '<input id="s'+c.id+'" type="number" step="1" min="1" max="9" data-k="stop" aria-label="Stop of car '+(i+1)+'" title="Stop" value="'+c.stop+'">'+
           '<label class="ski" for="r'+c.id+'"><input id="r'+c.id+'" type="checkbox" data-k="ski"'+(c.ski?' checked':'')+'> Roof box</label>'+
@@ -734,7 +737,7 @@ function drawSlot(p, car, idx, mode){
   var g = {x:p.g.x, w:p.g.w, y:p.g.y};
   if(p.id==="T1" && profiles[state.profile].highCab) g.y = 78;
   var out = [], hBox = p.maxH*PX;
-  var lbl = car ? (car.n+'. '+car.model+' on '+p.id+(sel?'':', tap to move')) : ('Empty position '+p.id);
+  var lbl = car ? (car.n+'. '+car.model+(car.vin?' ('+car.vin+')':'')+' on '+p.id+(sel?'':', tap to move')) : ('Empty position '+p.id);
   out.push('<g class="slot" data-pos="'+p.id+'" tabindex="0" role="button" aria-label="'+esc(lbl)+'"'+'>');
   out.push('<rect class="box" x="'+g.x+'" y="'+(g.y-hBox)+'" width="'+g.w+'" height="'+hBox+'" rx="3" '+
     (mode==="ok" ? 'fill="var(--ok)" fill-opacity=".12" stroke="var(--ok)" stroke-width="2" stroke-dasharray="6 3"'
@@ -753,6 +756,7 @@ function drawSlot(p, car, idx, mode){
     out.push('<circle cx="'+(x+w*0.2)+'" cy="'+(base-7)+'" r="7" fill="var(--ink)"/><circle cx="'+(x+w*0.8)+'" cy="'+(base-7)+'" r="7" fill="var(--ink)"/>');
     var label = car.n+" · "+shortName(car.model).replace(/\s*\(.*$/,""); if(label.length>18) label = label.slice(0,17)+"…";
     out.push('<text x="'+(x+w/2)+'" y="'+(base-bodyH/2+2)+'" text-anchor="middle" font-family="var(--body)" font-size="11" font-weight="600" fill="#fff">'+esc(label)+'</text>');
+    if(car.vin) out.push('<text x="'+(x+w/2)+'" y="'+(base-h+(h-bodyH+6)/2+4)+'" text-anchor="middle" font-family="var(--mono)" font-size="10" font-weight="600" fill="#fff">'+esc(idShort(car.vin))+'</text>');
     out.push('</g>');
   }
   if(car && car.pin) out.push('<text x="'+(g.x+g.w-5)+'" y="'+(g.y-hBox+12)+'" text-anchor="end" font-family="var(--mono)" font-size="10" fill="var(--accent)">moved</text>');
@@ -791,7 +795,7 @@ function render(){
   var behind = res.unplaced.map(function(u){ return u.car; }).concat(allCars.filter(function(c){ return c.left; }));
   $("leftbehind").hidden = !behind.length;
   $("leftbehind").innerHTML = behind.length ? '<span>Left behind:</span>'+behind.map(function(c){
-    return '<button data-selcar="'+c.id+'" class="'+(sel===c.id?'sel':'')+'">'+c.n+' · '+esc(shortName(c.model).replace(/\s*\(.*$/,""))+'</button>'; }).join("") : '';
+    return '<button data-selcar="'+c.id+'" class="'+(sel===c.id?'sel':'')+'">'+c.n+' · '+esc(shortName(c.model).replace(/\s*\(.*$/,""))+(c.vin?' · '+esc(c.vin):'')+'</button>'; }).join("") : '';
 
   // move bar
   var selCar = sel!==null ? allCars.filter(function(c){ return c.id===sel; })[0] : null;
@@ -833,7 +837,7 @@ function render(){
     }
     var pmL = effMaxL(p, res.map, prof), tl = c && pmL-c.len<0.05, th = c && p.maxH-c.h<0.03;
     return '<tr><td class="num">'+p.rank+'</td><td><b>'+p.id+'</b>'+(p.code?' <span class="pinned" style="color:var(--muted)">'+esc(p.code)+'</span>':'')+'<span class="pname">'+esc(p.name)+'</span></td>'+
-      '<td>'+(c?'<span style="color:'+stopColor(c.stop)+'">●</span> '+c.n+'. '+esc(c.model)+(c.ski?' <span class="hint">+ box</span>':'')+(c.pin?'<span class="pinned">FIXED</span>':''):'<span class="hint">empty</span>')+'</td>'+
+      '<td>'+(c?'<span style="color:'+stopColor(c.stop)+'">●</span> '+c.n+'. '+esc(c.model)+(c.vin?' <span class="hint" style="font-family:var(--mono)">'+esc(c.vin)+'</span>':'')+(c.ski?' <span class="hint">+ box</span>':'')+(c.pin?'<span class="pinned">FIXED</span>':''):'<span class="hint">empty</span>')+'</td>'+
       '<td class="num">'+(c?c.stop:"")+'</td>'+
       '<td class="num'+(tl?" tight":"")+'">'+(c?c.len.toFixed(2):"–")+' / '+pmL.toFixed(2)+(pmL>p.maxL?' <span class="hint">(uses middle)</span>':'')+'</td>'+
       '<td class="num'+(th?" tight":"")+'">'+(c?c.h.toFixed(2):"–")+' / '+p.maxH.toFixed(2)+'</td>'+
@@ -1072,8 +1076,8 @@ function buildPdf(jpeg, iw, ih, lines){
   var imgY = y - imgH;
   cmd.push("q "+imgW.toFixed(1)+" 0 0 "+imgH.toFixed(1)+" "+M+" "+imgY.toFixed(1)+" cm /Im1 Do Q");
   y = imgY - 20;
-  var cols = [M, M+40, M+65, M+330, M+370, M+430, M+490];
-  ["Pos","#","Car","Stop","Length","Height","Notes"].forEach(function(h,i){ text(cols[i], y, 9, true, h); });
+  var cols = [M, M+36, M+58, M+290, M+410, M+448, M+505, M+562];
+  ["Pos","#","Car","VIN / plate","Stop","Length","Height","Notes"].forEach(function(h,i){ text(cols[i], y, 9, true, h); });
   cmd.push("0.75 G 0.5 w "+M+" "+(y-4).toFixed(1)+" m "+(W-M)+" "+(y-4).toFixed(1)+" l S");
   y -= 15;
   lines.rows.forEach(function(r){
@@ -1118,11 +1122,11 @@ function exportPdf(){
       var ci = L.res.map[p.id], c = ci!==undefined ? L.cars[ci] : null;
       if(c){ placed[c.id] = true;
         var notes = []; if(c.ski) notes.push("roof box"); if(c.sport) notes.push("sports car"); if(c.pin) notes.push("moved by hand"); if(L.res.forced && L.res.forced[p.id]) notes.push("MAY NOT FIT, check clearances");
-        var nt = notes.join(", "); if(nt.length>72) nt = nt.slice(0,70)+"...";
-        rows.push([p.id, String(c.n), c.model, String(c.stop), c.len.toFixed(2)+" m", c.h.toFixed(2)+" m", nt]);
-      } else { var r = [p.id, "", "empty", "", "", "", ""]; r.empty = true; rows.push(r); }
+        var nt = notes.join(", "); if(nt.length>50) nt = nt.slice(0,48)+"...";
+        var mdl = c.model.length>46 ? c.model.slice(0,45)+"..." : c.model; rows.push([p.id, String(c.n), mdl, c.vin||"", String(c.stop), c.len.toFixed(2)+" m", c.h.toFixed(2)+" m", nt]);
+      } else { var r = [p.id, "", "empty", "", "", "", "", ""]; r.empty = true; rows.push(r); }
     });
-    var left = state.cars.filter(function(c){ return c.model && !placed[c.id]; }).map(function(c){ return c.model; });
+    var left = state.cars.filter(function(c){ return c.model && !placed[c.id]; }).map(function(c){ return c.model+(c.vin?" ("+c.vin+")":""); });
     var v = ($("vtext").textContent||"").trim();
     var rgb = /no room|breaks|doesn/i.test(v) ? "0.7 0.1 0.1" : /tight|might/i.test(v) ? "0.75 0.45 0" : "0.1 0.5 0.2";
     var date = new Date().toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"});
@@ -1210,8 +1214,8 @@ if(EMB){
     if(d.route && ROUTES.some(function(r){ return r.id===d.route; })) state.route = d.route;
     if(d.custom) state.custom = d.custom;
     state.cars = (d.cars||[]).map(function(c){
-      if(c.keep){ var k = JSON.parse(JSON.stringify(c.keep)); k.stop = c.stop || k.stop; k.id = uid++; return k; }
-      var n = carFromModel(c.model, c.stop, "", c.ski); n.ord = c.ord; if(!n.model){ n.note = c.model; } return n;
+      if(c.keep){ var k = JSON.parse(JSON.stringify(c.keep)); k.stop = c.stop || k.stop; k.id = uid++; k.vin = c.vin || ""; return k; }
+      var n = carFromModel(c.model, c.stop, "", c.ski); n.ord = c.ord; n.vin = c.vin || ""; if(!n.model){ n.note = c.model; } return n;
     });
     sel = null; moveMsg = ""; planCache = {key:null,res:null};
     state.pdfExtra = d.extra || "";
