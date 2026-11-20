@@ -95,12 +95,23 @@ function tStatus(t){
   if(os.some(o => o.loadedAt)) return ["On the road","load"];
   return ["Planning","plan"];
 }
-function tripStops(t){ // delivery locations in the order the driver will drive them
-  const os = tripOrders(t), locs = [...new Set(os.map(o => o.to||"?"))];
-  const order = (t.stops||[]).filter(l => locs.includes(l)).concat(locs.filter(l => !(t.stops||[]).includes(l)));
-  return order;
+/* A trip's route is an ordered list of stops (place ids). A place can come back: Antwerp → Liège → Antwerp.
+   A car is loaded at the first visit of its pickup place and unloaded at the next visit of its delivery place after that. */
+function legOf(seq, o){ const p = seq.indexOf(o.from||"?"); if(p<0) return null; const d = seq.indexOf(o.to||"?", p+1); return d<0 ? null : {p, d}; }
+function tripRoute(t){
+  const os = tripOrders(t);
+  let seq = t.seq && t.seq.length ? t.seq.slice() : [...new Set(os.map(o=>o.from||"?"))].concat((t.stops||[]).filter(l => os.some(o=>(o.to||"?")===l)));
+  os.forEach(o => { const f = o.from||"?", to = o.to||"?"; let p = seq.indexOf(f); if(p<0){ seq.push(f); p = seq.length-1; } if(seq.indexOf(to, p+1)<0) seq.push(to); });
+  const used = new Set(); os.forEach(o => { const l = legOf(seq, o); if(l){ used.add(l.p); used.add(l.d); } });
+  return seq.filter((_,i) => used.has(i));
 }
-function stopNo(t, o){ return tripStops(t).indexOf(o.to||"?")+1; }
+function tripLegs(t){ const seq = tripRoute(t), m = {}; tripOrders(t).forEach(o => m[o.id] = legOf(seq, o)); return {seq, legs:m}; }
+const tripStops = t => tripRoute(t); // kept for older code paths
+function loadStops(t){ const {seq, legs} = tripLegs(t); return seq.map((_,i)=>i).filter(i => tripOrders(t).some(o => legs[o.id] && legs[o.id].p===i)); }
+function onBoard(t, L){ const {legs} = tripLegs(t); return tripOrders(t).filter(o => legs[o.id] && legs[o.id].p<=L && legs[o.id].d>L); }
+// unloading number for the load planner: 1 = first car off after leaving stop L
+function stopNo(t, o, L){ const {legs} = tripLegs(t); if(L==null) L = legs[o.id] ? legs[o.id].p : 0;
+  const ds = [...new Set(onBoard(t, L).map(x => legs[x.id].d))].sort((a,b)=>a-b); return ds.indexOf(legs[o.id] ? legs[o.id].d : -1)+1; }
 const locName = id => (get("locations",id)||{}).name || "Unknown place";
 const custName = id => (get("customers",id)||{}).name || "No customer";
 const truckName = id => { const t = get("trucks",id); return t ? t.plate+(t.trailer?" + "+t.trailer:"") : "No truck"; };
@@ -201,8 +212,9 @@ R.home = () => {
   const open = sum(invs.filter(i=>i.sentAt && !i.paidAt), i=>invTotal(i).total);
   const alerts = [];
   os.filter(o => !o.deliveredAt && o.due && daysTo(o.due)<=1).forEach(o => alerts.push([daysTo(o.due)<0?"bad":"", `${esc(o.vin||o.ref)} ${esc(shortModel(o.model))} is ${daysTo(o.due)<0?"late (due "+fDate(o.due)+")":"due "+(daysTo(o.due)===0?"today":"tomorrow")}`, `order:${o.id}`, "Open"]));
-  trips.filter(t => tStatus(t)[0]==="Planning" && t.plan && t.plan.cls && t.plan.cls!=="ok").forEach(t => alerts.push(["", `Trip ${esc(t.name)}: load plan says “${esc(t.plan.text)}”`, `trip:${t.id}`, "Check"]));
-  trips.filter(t => tStatus(t)[0]==="Planning" && (t.orders||[]).length && t.planSig!==planSig(t)).forEach(t => alerts.push(["", `Trip ${esc(t.name)} has no up-to-date load plan`, `plan:${t.id}`, "Plan load"]));
+  trips.filter(t => tStatus(t)[0]==="Planning" && tripOrders(t).length).forEach(t => { const ps = tripPlanState(t);
+    if(ps.missing) alerts.push(["", `Trip ${esc(t.name)} has no up-to-date load plan${ps.n>1?` for ${ps.missing} of ${ps.n} loading stops`:""}`, `plan:${t.id}`, "Plan load"]);
+    else if(ps.worst && ps.worst.cls!=="ok") alerts.push(["", `Trip ${esc(t.name)}: load plan says “${esc(ps.worst.text)}”`, `trip:${t.id}`, "Check"]); });
   list("trucks").forEach(t => { if(t.inspection && daysTo(t.inspection)<=30) alerts.push([daysTo(t.inspection)<0?"bad":"", `Truck ${esc(t.plate)}: inspection ${daysTo(t.inspection)<0?"expired":"due"} ${fDate(t.inspection)}`, `truck:${t.id}`, "Open"]); });
   list("drivers").forEach(d => [["licence","driving licence"],["tacho","tachograph card"],["cpc","CPC"]].forEach(([k,l]) => { if(d[k] && daysTo(d[k])<=30) alerts.push([daysTo(d[k])<0?"bad":"", `${esc(d.name)}: ${l} ${daysTo(d[k])<0?"expired":"expires"} ${fDate(d[k])}`, `driver:${d.id}`, "Open"]); }));
   invs.filter(i => invState(i)[0]==="Overdue").forEach(i => alerts.push(["bad", `Invoice ${esc(i.number)} to ${esc(custName(i.customer))} is overdue (${money(invTotal(i).total)})`, `inv:${i.id}`, "Open"]));
@@ -497,7 +509,14 @@ function driverForm(id){ simpleForm(id?"Driver":"New driver","drivers",id, d => 
 
 /* ================= trips ================= */
 const POSROWS = [["T1","T2","T3"],["R1","R2","R3"],["R4","R5","R6"]];
-function planSig(t){ return JSON.stringify([tripOrders(t).map(o => [o.id,o.model,stopNo(t,o)]), (get("trucks",t.truck)||{}).profile||"", t.route||"base"]); }
+function planSig(t, L){ if(L==null) L = loadStops(t)[0]||0; return JSON.stringify([onBoard(t,L).map(o => [o.id,o.model,o.vin,stopNo(t,o,L)]), (get("trucks",t.truck)||{}).profile||"", t.route||"base"]); }
+// one load plan per stop where cars are loaded (the load leaving that stop)
+function planFor(t, L){ const ps = t.plans||{}; if(ps[L]) return ps[L]; return t.plan && !t.plans && L===loadStops(t)[0] ? Object.assign({sig:t.planSig}, t.plan) : null; }
+function planFresh(t, L){ const p = planFor(t, L); return !!(p && p.sig===planSig(t, L)); }
+function tripPlanState(t){ const ls = loadStops(t), order = {bad:0, warn:1, ok:2}; let worst = null, missing = 0;
+  ls.forEach(L => { const p = planFor(t, L); if(!planFresh(t, L)) missing++; if(p && p.text && (!worst || (order[p.cls]??1) < (order[worst.cls]??1))) worst = p; });
+  return {n:ls.length, missing, worst}; }
+function posOf(t, o){ const {legs} = tripLegs(t), l = legs[o.id]; const p = l ? planFor(t, l.p) : null; return p && p.positions ? p.positions[o.id]||"" : ""; }
 function tripCards(trips, compact){
   if(!trips.length) return "";
   return `<div class="cards">${trips.map(t => { const os = tripOrders(t), s = tStatus(t), stops = tripStops(t);
@@ -505,7 +524,7 @@ function tripCards(trips, compact){
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><h3>${esc(t.name)}</h3><span class="st ${s[1]}">${s[0]}</span></div>
       <p class="hint" style="margin:4px 0 8px">${fDate(t.date)} · ${esc(truckName(t.truck))} · ${esc(drvName(t.driver))}</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><b>${os.length} car${os.length===1?"":"s"}</b><span class="hint">${stops.length} stop${stops.length===1?"":"s"}</span>
-      ${t.plan && t.plan.text ? `<span class="st ${t.plan.cls==="ok"?"del":t.plan.cls==="bad"?"bad":"warn"}">${esc(t.plan.text)}</span>` : os.length?`<span class="st wait">No load plan</span>`:""}
+      ${(() => { if(!os.length) return ""; const ps = tripPlanState(t); return ps.worst && !ps.missing ? `<span class="st ${ps.worst.cls==="ok"?"del":ps.worst.cls==="bad"?"bad":"warn"}">${esc(ps.worst.text)}</span>` : `<span class="st wait">${ps.missing<ps.n?"Load plan incomplete":"No load plan"}</span>`; })()}
       ${compact?"":`<span class="num" style="margin-left:auto">${money(sum(os,o=>o.price))}</span>`}</div></button>`; }).join("")}</div>`;
 }
 function bindTripCards(){ $("main").querySelectorAll("[data-trip]").forEach(b => b.onclick = () => go("trip-"+b.dataset.trip)); }
@@ -522,48 +541,54 @@ R.trips = () => {
 R.after_trips = () => { bindTripCards(); $("main").querySelector('[data-act="new"]').onclick = () => newTrip([]); $("main").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { tripTab = b.dataset.tab; refresh(); }); };
 function newTrip(orderIds){
   const os = orderIds.map(id => get("orders",id)).filter(Boolean);
-  const from = os[0] ? locName(os[0].from) : "", to = os.length ? locName(os[os.length-1].to) : "";
+  const seq0 = []; os.forEach(o => { let p = seq0.indexOf(o.from); if(p<0){ seq0.push(o.from); p = seq0.length-1; } if(seq0.indexOf(o.to,p+1)<0) seq0.push(o.to); });
+  const from = seq0.length ? locName(seq0[0]) : "", to = seq0.length>1 ? locName(seq0[seq0.length-1]) : "";
   // a truck that is not already busy on an open trip, and the driver assigned to it
   const busy = new Set(list("trips").filter(x => ["Planning","On the road"].includes(tStatus(x)[0]) && tripOrders(x).length).map(x => x.truck));
   const truck = list("trucks").find(x => !busy.has(x.id)) || list("trucks")[0];
   const drv = truck && truck.driver && get("drivers",truck.driver) ? get("drivers",truck.driver) : list("drivers").find(d => !truckOf(d.id)) || list("drivers")[0];
-  const t = put("trips", {name: from && to ? `${from} → ${to}` : "Trip "+fDate(todayISO()), date: todayISO(), truck: truck?truck.id:"", driver: drv?drv.id:"", route:"base", orders: orderIds.slice(), stops:[], created: Date.now(), km:0}, true);
+  const t = put("trips", {name: from && to ? `${from} → ${to}` : "Trip "+fDate(todayISO()), date: todayISO(), truck: truck?truck.id:"", driver: drv?drv.id:"", route:"base", orders: orderIds.slice(), seq:seq0, created: Date.now(), km:0}, true);
   os.forEach(o => { const old = o.trip && get("trips",o.trip); if(old && old.id!==t.id){ old.orders = old.orders.filter(x=>x!==o.id); put("trips",old,true); } o.trip = t.id; put("orders",o,true); });
   go("trip-"+t.id); toast("Trip created");
 }
 const ROUTES = [["base","As in your real loads"],["eu","EU minimum (18.75 m, 4.00 m)"],["de","Germany (20.75 m loaded)"],["fr","France (20.35 m loaded)"],["uk","UK (18.75 m)"]];
+let tripLeg = {};
 R.trip = id => {
   const t = get("trips", id);
   if(!t) return `<div class="empty">This trip no longer exists. <a href="#trips">All trips</a></div>`;
-  const os = tripOrders(t), stops = tripStops(t), s = tStatus(t), truck = get("trucks",t.truck);
-  const plan = t.plan || null, fresh = plan && t.planSig===planSig(t);
-  const pos = {}; os.forEach(o => { const p = plan && plan.positions && plan.positions[o.id]; if(p) pos[p] = o; });
+  const os = tripOrders(t), {seq, legs} = tripLegs(t), s = tStatus(t), truck = get("trucks",t.truck), ls = loadStops(t);
+  const L = ls.includes(tripLeg[id]) ? tripLeg[id] : ls[0];
+  const plan = L!=null ? planFor(t, L) : null, fresh = L!=null && planFresh(t, L);
+  const pos = {}; if(plan && plan.positions) onBoard(t, L).forEach(o => { const p = plan.positions[o.id]; if(p) pos[p] = o; });
   const hos = list("handovers").filter(h => h.trip===t.id).sort((a,b)=>a.at-b.at);
-  const picked = os.filter(o=>o.loadedAt).length, delivered = os.filter(o=>o.deliveredAt).length;
-  const cell = p => { const o = pos[p]; return o ? `<div class="pos full"><b>${p}</b><span class="m">${esc(shortModel(o.model)||o.modelText)}</span><span class="hint">Stop ${stopNo(t,o)}</span></div>` : `<div class="pos${truck && truck.profile==="eurolohr200-high" && p==="T1"?" none":""}"><b>${p}</b><span class="hint">empty</span></div>`; };
+  const delivered = os.filter(o=>o.deliveredAt).length;
+  const cell = p => { const o = pos[p]; return o ? `<div class="pos full"><b>${p}</b><span class="m">${esc(shortModel(o.model)||o.modelText)}</span><span class="hint">Off at ${stopNo(t,o,L)}</span></div>` : `<div class="pos${truck && truck.profile==="eurolohr200-high" && p==="T1"?" none":""}"><b>${p}</b><span class="hint">empty</span></div>`; };
+  const carLine = (o, kind) => `<div class="carline"><span class="tag" title="${kind==="load"?"Loaded here":"Unloaded here"}">${kind==="load"?"↑ load":"↓ off"}</span><span class="tag">${esc(posOf(t,o)||"–")}</span><span class="grow"><b>${esc(shortModel(o.model)||o.modelText)}</b> <span class="hint vin">${esc(o.vin)}</span>${o.nonRunner?' <span class="tag">non-runner</span>':""}${kind==="load"?` <span class="hint">to ${esc(locName(o.to))}</span>`:` <span class="hint">from ${esc(locName(o.from))}</span>`}</span>${pill(oStatus(o))}
+    ${!o.loadedAt?`<button class="btn sm" data-rm="${o.id}">Remove</button>`:""}</div>`;
   return `<div class="head"><div><p style="margin:0 0 4px"><a href="#trips">← Trips</a></p><h1>${esc(t.name)}</h1>
     <p>${fDate(t.date)} · ${esc(truckName(t.truck))} · ${esc(drvName(t.driver))} · <span class="st ${s[1]}">${s[0]}</span></p></div>
     <div class="tools" style="margin:0"><button class="btn" data-act="edit">Edit trip</button><button class="btn" data-act="add">+ Add cars</button><button class="btn pri" data-act="plan">Open in load planner</button></div></div>
   <div class="tripgrid">
     <section>
-      <h2 style="margin-bottom:10px">Stops</h2>
-      ${os.length ? `<div class="stop"><header><span class="n">P</span><b>Pickup</b><span class="hint">${[...new Set(os.map(o=>locName(o.from)))].map(esc).join(", ")}</span>
-        <span style="margin-left:auto" class="hint">${picked}/${os.length} picked up</span>${picked<os.length?`<a class="btn sm pri" href="#handover-${t.id}" data-hk="pickup">Pickup handover</a>`:""}</header></div>` : ""}
-      ${stops.map((l,i) => { const so = os.filter(o => (o.to||"?")===l), dn = so.filter(o=>o.deliveredAt).length;
-        return `<div class="stop"><header><span class="n">${i+1}</span><b>${esc(locName(l))}</b><span class="hint">${esc((get("locations",l)||{}).hours||"")}</span>
-          <span style="margin-left:auto;display:flex;gap:4px">${i>0?`<button class="btn sm" data-up="${i}" aria-label="Move stop up">↑</button>`:""}${i<stops.length-1?`<button class="btn sm" data-down="${i}" aria-label="Move stop down">↓</button>`:""}</span>
-          ${dn<so.length && so.every(o=>o.loadedAt) ? `<a class="btn sm pri" href="#handover-${t.id}" data-hk="d:${l}">Delivery handover</a>` : dn===so.length ? `<span class="st del">Delivered</span>` : ""}</header>
-          ${so.map(o => `<div class="carline"><span class="tag">${esc((plan&&plan.positions&&plan.positions[o.id])||"–")}</span><span class="grow"><b>${esc(shortModel(o.model)||o.modelText)}</b> <span class="hint vin">${esc(o.vin)}</span>${o.nonRunner?' <span class="tag">non-runner</span>':""}</span>${pill(oStatus(o))}
-            ${!o.loadedAt?`<button class="btn sm" data-rm="${o.id}">Remove</button>`:""}</div>`).join("")}</div>`; }).join("") || `<div class="empty">No cars on this trip yet. <button class="btn sm pri" data-act="add">Add cars</button></div>`}
+      <h2 style="margin-bottom:4px">Route</h2>
+      <p class="hint" style="margin:0 0 10px">${seq.length} stop${seq.length===1?"":"s"}. Cars can be loaded and unloaded at any stop. Move stops with ↑ ↓; a car's pickup always stays before its delivery.</p>
+      ${seq.map((l,i) => { const up = os.filter(o => legs[o.id] && legs[o.id].p===i), off = os.filter(o => legs[o.id] && legs[o.id].d===i);
+        const toLoad = up.filter(o=>!o.loadedAt), toOff = off.filter(o=>o.loadedAt && !o.deliveredAt), done = up.every(o=>o.loadedAt) && off.every(o=>o.deliveredAt);
+        const after = onBoard(t, i).length;
+        return `<div class="stop"><header><span class="n">${i+1}</span><b>${esc(locName(l))}</b><span class="hint">${off.length?off.length+" off":""}${off.length&&up.length?" · ":""}${up.length?up.length+" on":""} · ${after} on board after</span>
+          <span style="margin-left:auto;display:flex;gap:4px;flex-wrap:wrap">${i>0?`<button class="btn sm" data-up="${i}" aria-label="Move stop up">↑</button>`:""}${i<seq.length-1?`<button class="btn sm" data-down="${i}" aria-label="Move stop down">↓</button>`:""}
+          ${toOff.length?`<a class="btn sm dark" href="#handover-${t.id}" data-hk="d:${i}">Delivery handover</a>`:""}${toLoad.length?`<a class="btn sm pri" href="#handover-${t.id}" data-hk="p:${i}">Pickup handover</a>`:""}${done?`<span class="st del">Done</span>`:""}</span></header>
+          ${off.map(o => carLine(o,"off")).join("")}${up.map(o => carLine(o,"load")).join("")}</div>`; }).join("") || `<div class="empty">No cars on this trip yet. <button class="btn sm pri" data-act="add">Add cars</button></div>`}
       ${hos.length ? `<h2 style="margin:22px 0 10px">Handovers done</h2><ul class="alerts">${hos.map(h=>`<li><span><b>${h.kind==="pickup"?"Pickup":"Delivery"}</b> at ${esc(locName(h.loc))} · ${fDT(h.at)} · ${h.orders.length} cars · ${h.unattended?"unattended":"signed by "+esc(h.name||"")}</span><a class="btn sm" href="#ecmr">eCMR</a></li>`).join("")}</ul>` : ""}
     </section>
     <aside>
       <div class="card">
         <h2 style="margin-bottom:8px">Load plan</h2>
-        ${plan && plan.text ? `<div class="verdict"><span class="vbig ${plan.cls}">${esc(plan.text)}</span>${fresh?"":`<span class="st warn">Out of date: cars or truck changed</span>`}</div>` : `<p class="hint">No plan yet. Open the load planner: it gets this trip's cars and stop numbers, and the plan comes back here.</p>`}
+        ${ls.length>1 ? `<div class="chips" style="margin-bottom:10px">${ls.map(x => `<button class="fchip ${x===L?"on":""}" data-leg="${x}">Leaving ${x+1} · ${esc(locName(seq[x]))}${planFresh(t,x)?"":" •"}</button>`).join("")}</div><p class="hint" style="margin:-4px 0 10px">Cars are loaded at ${ls.length} stops, so each has its own plan for the cars on board when the truck leaves. • = no up-to-date plan.</p>` : ""}
+        ${plan && plan.text ? `<div class="verdict"><span class="vbig ${plan.cls}">${esc(plan.text)}</span>${fresh?"":`<span class="st warn">Out of date: cars or truck changed</span>`}</div>` : `<p class="hint">No plan yet. Open the load planner: it gets the cars on board${ls.length>1?" leaving this stop":""} with their unloading order, and the plan comes back here.</p>`}
         <div class="posmap">${POSROWS.map((r,i) => i===0 ? `<div class="posrow">${r.map(cell).join("")}<span></span><span></span><span></span><span></span></div>` : "").join("")}
           <div class="posrow">${POSROWS[1].map(cell).join("")}<span></span>${POSROWS[2].map(cell).join("")}</div>
-          <p class="hint" style="margin:2px 0 0">Top: truck T1–T3. Bottom: trailer upper deck R1–R3 · lower deck R4–R6.${plan&&plan.at?` Planned ${fDT(plan.at)}.`:""}</p></div>
+          <p class="hint" style="margin:2px 0 0">Top: truck T1–T3. Bottom: trailer upper deck R1–R3 · lower deck R4–R6. "Off at 1" = first car off.${plan&&plan.at?` Planned ${fDT(plan.at)}.`:""}</p></div>
         <div style="margin-top:12px;display:grid;gap:6px"><button class="btn pri" data-act="plan" style="width:100%">${plan?"Change the plan":"Plan the load"}</button>${os.length?`<button class="btn" data-act="pdf" style="width:100%">Download load plan PDF</button>`:""}</div>
       </div>
       <div class="card" style="margin-top:12px">${tripMoneyHtml(t)}</div>
@@ -572,15 +597,19 @@ R.trip = id => {
   </div>`;
 };
 R.after_trip = id => {
-  const t = get("trips", id); if(!t) return; const m = $("main");
+  const t = get("trips", id); if(!t) return; const m = $("main"), ls = loadStops(t), L = ls.includes(tripLeg[id]) ? tripLeg[id] : ls[0];
   m.querySelectorAll('[data-act="edit"]').forEach(b => b.onclick = () => tripForm(id));
   m.querySelectorAll('[data-act="add"]').forEach(b => b.onclick = () => addCars(id));
-  m.querySelectorAll('[data-act="plan"]').forEach(b => b.onclick = () => openPlanner(id));
-  m.querySelectorAll('[data-act="pdf"]').forEach(b => b.onclick = () => openPlanner(id, true));
+  m.querySelectorAll('[data-act="plan"]').forEach(b => b.onclick = () => openPlanner(id, false, L));
+  m.querySelectorAll('[data-act="pdf"]').forEach(b => b.onclick = () => openPlanner(id, true, L));
+  m.querySelectorAll("[data-leg]").forEach(b => b.onclick = () => { tripLeg[id] = +b.dataset.leg; refresh(); });
   m.querySelectorAll("[data-hk]").forEach(a => a.onclick = () => { hoPick = {trip:id, stop:a.dataset.hk}; });
-  m.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { const o = get("orders",b.dataset.rm); t.orders = t.orders.filter(x=>x!==o.id); put("trips",t,true); delete o.trip; put("orders",o); toast("Removed from trip"); });
+  m.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { const o = get("orders",b.dataset.rm); t.orders = t.orders.filter(x=>x!==o.id); t.seq = tripRoute(Object.assign({}, t)); put("trips",t,true); delete o.trip; put("orders",o); toast("Removed from trip"); });
   m.querySelectorAll("[data-setkm]").forEach(b => b.onclick = () => { t.km = +b.dataset.setkm; put("trips",t); toast("Distance set"); });
-  const mv = (i, d) => { const st = tripStops(t); [st[i], st[i+d]] = [st[i+d], st[i]]; t.stops = st; put("trips",t); };
+  const mv = (i, d) => { const seq = tripRoute(t); [seq[i], seq[i+d]] = [seq[i+d], seq[i]];
+    const bad = tripOrders(t).filter(o => { const l = legOf(seq, o), old = tripLegs(t).legs[o.id]; return !l || (o.loadedAt && old && l.p!==old.p) || (o.deliveredAt && old && l.d!==old.d); });
+    if(bad.length){ toast(`Not possible: ${shortModel(bad[0].model)||bad[0].vin} would be delivered before it is picked up, or it is already handed over`); return; }
+    t.seq = seq; put("trips",t); };
   m.querySelectorAll("[data-up]").forEach(b => b.onclick = () => mv(+b.dataset.up, -1));
   m.querySelectorAll("[data-down]").forEach(b => b.onclick = () => mv(+b.dataset.down, 1));
 };
@@ -591,7 +620,7 @@ function tripForm(id){
     ${sel("Truck","truck",[["","No truck"]].concat(list("trucks").map(x=>[x.id,truckName(x.id)])),t.truck)}
     ${sel("Driver (set from the truck)","driver",[["","No driver"]].concat(list("drivers").map(x=>[x.id,x.name+(truckOf(x.id)?" · "+truckOf(x.id).plate:"")])),t.driver)}
     ${sel("Route rules for the load planner","route",ROUTES,t.route||"base")}
-    <label class="f">Distance incl. empty km (km)<input name="km" type="number" min="0" step="1" value="${esc(t.km||"")}"><span class="hint">${(()=>{ const r = tripRouteKm(t); return r.km!=null ? (r.est?"Expected":"Known")+" distances: "+r.km+" km loaded, add the way back" : r.missing.length ? "Missing distance: "+r.missing.map(p=>locName(p[0])+" → "+locName(p[1])).join(", ") : ""; })()}</span></label>
+    <label class="f">Distance incl. empty km (km)<input name="km" type="number" min="0" step="1" value="${esc(t.km||"")}"><span class="hint">${(()=>{ const r = tripRouteKm(t); return r.km!=null ? (r.est?"Expected":"Known")+" distances along the route: "+r.km+" km, add any empty km" : r.missing.length ? "Missing distance: "+r.missing.map(p=>locName(p[0])+" → "+locName(p[1])).join(", ") : ""; })()}</span></label>
     ${fld("Days (empty = from km, 0.5 for half a day)","days",t.days||"","number",'min="0" step="0.5"')}
     ${fld("Tolls paid ("+(S().currency||"EUR")+", empty = estimate)","tolls",t.tolls??"","number",'min="0" step="0.01"')}
     ${fld("Other costs ("+(S().currency||"EUR")+")","otherCost",t.otherCost||"","number",'min="0" step="0.01"')}
@@ -627,40 +656,47 @@ function addCars(id){
 }
 
 /* ================= load planner (the existing planner, embedded) ================= */
-let planTrip = null, frameReady = false, planPdf = false;
-function openPlanner(id, pdf){ planTrip = id||null; planPdf = !!pdf; frameReady = false; if(view==="planner"){ lastView = null; refresh(); } else go("planner"); }
+let planTrip = null, frameReady = false, planPdf = false, planL = null;
+function openPlanner(id, pdf, L){ planTrip = id||null; planPdf = !!pdf; planL = id ? (L!=null ? L : (loadStops(get("trips",id)||{})[0]||0)) : null; frameReady = false; if(view==="planner"){ lastView = null; refresh(); } else go("planner"); }
 R.planner = () => `<div id="pbar"></div><iframe class="planner" id="lpframe" src="planner.html" title="Car load planner"></iframe>`;
 R.plannerBar = () => {
   const t = planTrip && get("trips",planTrip), el = $("pbar"); if(!el) return;
-  el.innerHTML = t ? `<div class="plannerbar"><span><b>Planning ${esc(t.name)}</b> · ${tripOrders(t).length} cars · ${esc(truckName(t.truck))}. Moves you make are saved to the trip.</span>
+  const ls = t ? loadStops(t) : [], seq = t ? tripRoute(t) : [];
+  el.innerHTML = t ? `<div class="plannerbar"><span><b>Planning ${esc(t.name)}</b>${ls.length>1?` · leaving stop ${planL+1}, ${esc(locName(seq[planL]))}`:""} · ${onBoard(t, planL).length} cars on board · ${esc(truckName(t.truck))}. Moves you make are saved to the trip.</span>
+      ${ls.length>1?`<select class="inp" id="pleg" style="max-width:260px">${ls.map(x=>opt(x,"Leaving stop "+(x+1)+" · "+locName(seq[x]),planL)).join("")}</select>`:""}
       <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" id="preload">Reload trip cars</button><a class="btn sm dark" href="#trip-${t.id}">Done, back to trip</a></span></div>`
     : `<div class="plannerbar free"><span><b>Free planning.</b> Not linked to a trip: use it to try loads. To plan a trip, open the trip and choose “Open in load planner”.</span>
       ${list("trips").filter(x=>tStatus(x)[0]==="Planning").length ? `<select class="inp" id="ptrip" style="max-width:260px;margin-left:auto">${opt("","Or pick a trip…","")}${list("trips").filter(x=>tStatus(x)[0]==="Planning").map(x=>opt(x.id,x.name,"")).join("")}</select>`:""}</div>`;
   const r = $("preload"); if(r) r.onclick = () => sendTrip(true);
-  const p = $("ptrip"); if(p) p.onchange = () => { if(p.value){ planTrip = p.value; R.plannerBar(); sendTrip(); } };
+  const pl = $("pleg"); if(pl) pl.onchange = () => { planL = +pl.value; R.plannerBar(); sendTrip(); };
+  const p = $("ptrip"); if(p) p.onchange = () => { if(p.value){ planTrip = p.value; planL = loadStops(get("trips",p.value))[0]||0; R.plannerBar(); sendTrip(); } };
 };
 R.after_planner = () => { R.plannerBar(); };
 function sendTrip(reset){
   const t = planTrip && get("trips",planTrip), fr = $("lpframe"); if(!t || !fr || !fr.contentWindow) return;
-  const truck = get("trucks",t.truck)||{}, keep = {};
-  if(!reset) (t.lpCars||[]).forEach(c => { if(c.ord) keep[c.ord] = c; });
-  const cars = tripOrders(t).map(o => ({ord:o.id, vin:o.vin||"", model:o.model||o.modelText||"", stop:stopNo(t,o), keep: keep[o.id] && keep[o.id].model===o.model ? keep[o.id] : null}));
+  const truck = get("trucks",t.truck)||{}, keep = {}, L = planL||0, seq = tripRoute(t);
+  if(!reset) (((t.lpCarsBy||{})[L]) || (L===loadStops(t)[0] ? t.lpCars : null) || []).forEach(c => { if(c.ord) keep[c.ord] = c; });
+  const cars = onBoard(t, L).map(o => ({ord:o.id, vin:o.vin||"", model:o.model||o.modelText||"", stop:stopNo(t,o,L), keep: keep[o.id] && keep[o.id].model===o.model ? keep[o.id] : null}));
   const extra = [truck.plate ? truckName(t.truck) : "", t.driver ? drvName(t.driver) : ""].filter(Boolean).join(" · ");
-  fr.contentWindow.postMessage({type:"lp-load", trip:t.id, name:t.name, profile:truck.profile||"eurolohr200-low", route:t.route||"base", cars, extra, pdf:planPdf}, "*"); planPdf = false;
+  fr.contentWindow.postMessage({type:"lp-load", trip:t.id+"~"+L, name:t.name+(loadStops(t).length>1?" · leaving "+locName(seq[L]):""), profile:truck.profile||"eurolohr200-low", route:t.route||"base", cars, extra, pdf:planPdf}, "*"); planPdf = false;
 }
 let planWrite = {};
 window.addEventListener("message", e => {
   const fr = $("lpframe"), d = e.data||{}; if(!fr || e.source!==fr.contentWindow) return;
   if(d.type==="lp-pdf" && d.blob){ saveFile(d.blob, d.name||"load-plan.pdf"); toast("Load plan PDF ready"); return; }
   if(d.type==="lp-ready"){ frameReady = true; if(planTrip) sendTrip(); }
-  if(d.type==="lp-plan" && d.tmsTrip && d.tmsTrip===planTrip){
-    const t = get("trips",d.tmsTrip); if(!t) return;
+  if(d.type==="lp-plan" && d.tmsTrip && d.tmsTrip===planTrip+"~"+planL){
+    const L = planL, t = get("trips",planTrip); if(!t) return;
     const positions = {}; (d.cars||[]).forEach(c => { if(c.ord && d.positions && d.positions[c.id]) positions[c.ord] = d.positions[c.id]; });
     const plan = {text: d.verdict ? d.verdict.text : "", cls: d.verdict ? d.verdict.cls : "", positions, at: Date.now(), profile:d.profile, route:d.route};
     const lp = (d.cars||[]).map(c => { const x = Object.assign({}, c); delete x.id; return x; });
-    if(t.plan && JSON.stringify([t.plan.text,t.plan.cls,t.plan.positions,t.route])===JSON.stringify([plan.text,plan.cls,plan.positions,d.route]) && JSON.stringify(t.lpCars)===JSON.stringify(lp)) return;
+    const old = planFor(t, L);
+    if(old && JSON.stringify([old.text,old.cls,old.positions,t.route])===JSON.stringify([plan.text,plan.cls,plan.positions,d.route]) && JSON.stringify((t.lpCarsBy||{})[L])===JSON.stringify(lp) && old.sig===planSig(t,L)) return;
     clearTimeout(planWrite[t.id]);
-    planWrite[t.id] = setTimeout(() => { const tt = get("trips",t.id); if(!tt) return; tt.plan = plan; tt.lpCars = lp; if(d.route) tt.route = d.route; tt.planSig = planSig(tt); put("trips",tt,true); renderTabs(); }, 700);
+    planWrite[t.id] = setTimeout(() => { const tt = get("trips",t.id); if(!tt) return; if(d.route) tt.route = d.route;
+      if(!tt.plans){ tt.plans = {}; const f = loadStops(tt)[0]; if(tt.plan && f!=null && f!==L) tt.plans[f] = Object.assign({sig:tt.planSig}, tt.plan); }
+      plan.sig = planSig(tt, L); tt.plans[L] = plan; tt.lpCarsBy = Object.assign({}, tt.lpCarsBy||{}, {[L]:lp}); delete tt.plan; delete tt.lpCars; delete tt.planSig;
+      put("trips",tt,true); renderTabs(); }, 700);
   }
 });
 
@@ -672,11 +708,13 @@ const EXTRA_ZONES = [["wh","Wheels / rims"],["in","Interior"],["un","Underbody"]
 const zoneName = k => (ZONES.find(z=>z[0]===k)||EXTRA_ZONES.find(z=>z[0]===k)||[,k])[1];
 const DTYPES = ["Scratch","Dent","Stone chip","Crack / broken","Missing part","Paint damage","Too dirty to inspect"];
 const DSEV = ["Small (under 2 cm)","Medium (2–10 cm)","Large (over 10 cm)"];
-function stopsFor(t){ // what can be handed over on this trip right now
-  const os = tripOrders(t), out = [];
-  const notPicked = os.filter(o => !o.loadedAt);
-  if(notPicked.length) out.push({key:"pickup", kind:"pickup", label:`Pickup · ${[...new Set(notPicked.map(o=>locName(o.from)))].join(", ")}`, loc:notPicked[0].from, orders:notPicked});
-  tripStops(t).forEach((l,i) => { const so = os.filter(o => (o.to||"?")===l && o.loadedAt && !o.deliveredAt); if(so.length) out.push({key:"d:"+l, kind:"delivery", label:`Stop ${i+1} · Delivery at ${locName(l)}`, loc:l, orders:so}); });
+function stopsFor(t){ // what can be handed over on this trip right now, in route order
+  const os = tripOrders(t), {seq, legs} = tripLegs(t), out = [];
+  seq.forEach((l,i) => {
+    const off = os.filter(o => legs[o.id] && legs[o.id].d===i && o.loadedAt && !o.deliveredAt), on = os.filter(o => legs[o.id] && legs[o.id].p===i && !o.loadedAt);
+    if(off.length) out.push({key:"d:"+i, kind:"delivery", label:`Stop ${i+1} · Delivery at ${locName(l)}`, loc:l, orders:off});
+    if(on.length) out.push({key:"p:"+i, kind:"pickup", label:`Stop ${i+1} · Pickup at ${locName(l)}`, loc:l, orders:on});
+  });
   return out;
 }
 R.handover = id => {
@@ -724,7 +762,7 @@ function hoCar(o, i, del){
   const c = hoDraft.checks[o.id], z = hoZone[o.id];
   const before = del ? (o.dmgPickup||[]) : [];
   const hitZ = new Set(c.damages.map(d=>d.zone)), oldZ = new Set(before.map(d=>d.zone));
-  const t = get("trips",hoDraft.trip), pos = t && t.plan && t.plan.positions ? t.plan.positions[o.id] : "";
+  const t = get("trips",hoDraft.trip), pos = t ? posOf(t, o) : "";
   return `<article class="hcar ${c.on && c.vin?"done":""}" data-car="${o.id}">
     <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px">
       <div><h3>${i+1}. ${esc(shortModel(o.model)||o.modelText)}${pos?` <span class="tag">${esc(pos)}</span>`:""}</h3><p class="hint" style="margin:2px 0 0">${esc(custName(o.customer))} · to ${esc(locName(o.to))}${o.nonRunner?" · non-runner":""}${o.notes?" · "+esc(o.notes):""}</p></div>
@@ -868,7 +906,7 @@ function tripMoney(t){
 }
 function tripRouteKm(t){ // suggested trip distance from the known place-to-place distances: pickup -> stop 1 -> stop 2 ...
   const os = tripOrders(t); if(!os.length) return {km:null, missing:[]};
-  const pts = [os[0].from].concat(tripStops(t)), missing = []; let km = 0;
+  const pts = tripRoute(t), missing = []; let km = 0;
   let est = false;
   for(let i=1;i<pts.length;i++){ const d = distInfo(pts[i-1], pts[i]); if(d.km==null) missing.push([pts[i-1],pts[i]]); else { km += d.km; if(d.est) est = true; } }
   return {km: missing.length ? null : km, missing, pts, est};
@@ -887,7 +925,7 @@ function tripMoneyHtml(t){
     : `<tr><td colspan="2"><span class="hint">Add the distance to see costs and margin.</span> ${sug.km!=null?`<button class="btn sm" data-setkm="${sug.km}">Use ${sug.est?"expected ":""}${sug.km} km</button>`:""}<button class="btn sm" data-act="edit">Add km</button></td></tr>`}
     ${val?`<tr><td>Cargo value</td><td class="num">${money(val)}${truck&&truck.insurance&&val>truck.insurance?` <span class="st bad">over insurance ${money(truck.insurance)}</span>`:""}</td></tr>`:""}
   </tbody></table>
-  ${m.cost.km && sug.km!=null && sug.km!==m.cost.km ? `<p class="hint" style="margin:8px 0 0">${sug.est?"Expected":"Known"} distances add up to ${sug.km} km loaded, without the way back. <button class="btn sm" data-setkm="${sug.km}">Use ${sug.km} km</button></p>`:""}`;
+  ${m.cost.km && sug.km!=null && sug.km!==m.cost.km ? `<p class="hint" style="margin:8px 0 0">${sug.est?"Expected":"Known"} distances along the route add up to ${sug.km} km (empty km to and from the route not included). <button class="btn sm" data-setkm="${sug.km}">Use ${sug.km} km</button></p>`:""}`;
 }
 
 /* ----- finance tab ----- */
@@ -1689,16 +1727,16 @@ function loadDemo(){
   const O = (model, cust, from, to, price, extra) => { const v = (vins[n%vins.length] + String(100000+n*7919).slice(-6)).slice(0,17); n++; return put("orders", Object.assign({vin:v, model, customer:cust, from, to, price, ready:addDays(T,-2), due:addDays(T,4), released:true, releasedAt:ago(2), created:ago(3)-n*1000, ref:"PO-"+(4100+n)}, extra||{}), true); };
   // trip 1: today, ready to plan (Zeebrugge -> Munich / Augsburg)
   const a = [O("Volkswagen Golf Mk8 (CD1) (2020-)",weber,zee,wm,282.2), O("Volkswagen Tiguan AD1 (2016-2024)",weber,zee,wm,282.2), O("Volkswagen Polo AW (2017-)",weber,zee,wa,265.2), O("Audi A3 Sportback 8Y (2020-)",weber,zee,wa,265.2,{value:38000}), O("Skoda Octavia Combi NX (2019-)",weber,zee,wm,282.2), O("Volvo XC90 256 (2015-)",weber,zee,wa,265.2,{value:82000}), O("BMW X5 G05 (2018-)",weber,zee,wm,282.2,{value:91000})];
-  const trip1 = put("trips", {name:"Zeebrugge → München / Augsburg", date:T, truck:t1, driver:d1, route:"de", orders:a.map(o=>o.id), stops:[wa,wm], created:ago(1), km:1060, days:2}, true);
+  const trip1 = put("trips", {name:"Zeebrugge → München / Augsburg", date:T, truck:t1, driver:d1, route:"de", orders:a.map(o=>o.id), seq:[zee,wa,wm], created:ago(1), km:1060, days:2}, true);
   a.forEach(o => { o.trip = trip1.id; put("orders",o,true); });
   // trip 2: on the road (Antwerp -> Liège), picked up yesterday with one scratch noted
   const b = [O("Renault Clio BF (2019-)",dupont,ant,dl,165), O("Peugeot 208 P21 (2019-)",dupont,ant,dl,165), O("Peugeot 3008 P84 (2016-2023)",dupont,ant,dl,165)];
-  const trip2 = put("trips", {name:"Antwerp → Liège", date:addDays(T,-1), truck:t2, driver:d2, route:"base", orders:b.map(o=>o.id), stops:[dl], created:ago(2), km:160, days:0.5}, true);
+  const trip2 = put("trips", {name:"Antwerp → Liège", date:addDays(T,-1), truck:t2, driver:d2, route:"base", orders:b.map(o=>o.id), seq:[ant,dl], created:ago(2), km:250, days:1}, true);
   const h2 = put("handovers", {trip:trip2.id, kind:"pickup", loc:ant, orders:b.map(o=>o.id), at:ago(1), name:"J. Peeters", sig:demoSig("JPeeters"), keys:true, driver:d2, truck:t2, checks:{}}, true);
   b.forEach((o,i) => { o.trip = trip2.id; o.loadedAt = ago(1); o.hoPickup = h2.id; o.dmgPickup = i===2 ? [{zone:"rb", type:"Scratch", sev:"Small (under 2 cm)"}] : []; put("orders",o,true); });
   // trip 3: completed (Mantova -> Verona / Brescia), not invoiced yet
   const c = [O("Fiat 500 312 (2007-2024)",rossi,mn,rv,120), O("Toyota Yaris XP210 (2020-)",rossi,mn,rv,120), O("Alfa Romeo Stelvio 949 (2017-)",rossi,mn,rb,130), O("Ford Puma J2K (2019-)",rossi,mn,rb,120)];
-  const trip3 = put("trips", {name:"Mantova → Verona / Brescia", date:addDays(T,-3), truck:t1, driver:d1, route:"base", orders:c.map(o=>o.id), stops:[rb,rv], created:ago(4), km:160, days:0.5, tolls:21.4}, true);
+  const trip3 = put("trips", {name:"Mantova → Verona / Brescia", date:addDays(T,-3), truck:t1, driver:d1, route:"base", orders:c.map(o=>o.id), seq:[mn,rb,rv], created:ago(4), km:160, days:0.5, tolls:21.4}, true);
   const h3 = put("handovers", {trip:trip3.id, kind:"pickup", loc:mn, orders:c.map(o=>o.id), at:ago(3), name:"L. Bianchi", sig:demoSig("LBianchi"), keys:true, driver:d1, truck:t1, checks:{}}, true);
   const h4 = put("handovers", {trip:trip3.id, kind:"delivery", loc:rb, orders:[c[2].id,c[3].id], at:ago(3)+3*36e5, name:"M. Ferri", sig:demoSig("MFerri"), keys:true, driver:d1, truck:t1, checks:{}}, true);
   const h5 = put("handovers", {trip:trip3.id, kind:"delivery", loc:rv, orders:[c[0].id,c[1].id], at:ago(3)+5*36e5, name:"", unattended:true, keys:true, notes:"Keys in the dealer's key box", driver:d1, truck:t1, checks:{}}, true);
@@ -1712,7 +1750,7 @@ function loadDemo(){
   old2.invoice = inv2.id; put("orders",old2,true);
   // waiting: released and not released
   O("Tesla Model Y Pre-facelift (2020-2025)",weber,zee,wa,265.2); O("Toyota RAV4 XA50 (2018-2025)",dupont,ant,dl,165);
-  O("Porsche 911 992 (2019-)",weber,zee,wm,260,{released:false, releasedAt:null, value:145000, notes:"Very low car: R6 only"}); O("Volvo V60 225 (2018-)",dupont,dl,ant,165,{vin:"1-ABC-234", notes:"Used car, no VIN on the papers yet"}); O("Kia Sportage NQ5 (2021-)",rossi,mn,rv,120,{released:false, releasedAt:null});
+  O("Porsche 911 992 (2019-)",weber,zee,wm,260,{released:false, releasedAt:null, value:145000, notes:"Very low car: R6 only"}); { const back = O("Volvo V60 225 (2018-)",dupont,dl,ant,165,{vin:"1-ABC-234", notes:"Used car, no VIN on the papers yet"}); back.trip = trip2.id; put("orders",back,true); const t2x = clone(get("trips",trip2.id)); t2x.orders.push(back.id); t2x.seq = [ant,dl,ant]; t2x.name = "Antwerp → Liège → Antwerp"; put("trips",t2x,true); } O("Kia Sportage NQ5 (2021-)",rossi,mn,rv,120,{released:false, releasedAt:null});
   dbEmpty = false; refresh(); toast("Demo data loaded");
 }
 
