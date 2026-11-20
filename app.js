@@ -141,7 +141,7 @@ function confirmBtn(btn, msg, fn){ if(btn.dataset.armed){ fn(); return; } btn.da
 /* ================= router, tabs, search ================= */
 const VIEWS = [
   ["home","Home"],["orders","Orders"],["trips","Trips"],["planner","Load planner"],["handover","Handover"],
-  ["ecmr","eCMR"],["invoices","Invoices"],["finance","Finance"],["fleet","Fleet & drivers"],["customers","Customers & places"],["settings","Settings"]];
+  ["ecmr","eCMR"],["invoices","Invoices"],["finance","Finance"],["stats","Statistics"],["fleet","Fleet & drivers"],["customers","Customers & places"],["settings","Settings"]];
 const R = {}; // view renderers
 let view = "home", param = "";
 function parseHash(){ const h = (location.hash||"#home").slice(1); const m = h.match(/^(trip|handover)-([a-z0-9]+)$/i); if(m){ view = m[1]==="trip"?"trip":"handover"; param = m[2]; } else { view = VIEWS.some(v=>v[0]===h) ? h : "home"; param = ""; } }
@@ -202,6 +202,7 @@ const ICON = {
   invoices:'<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z M9 8h6 M9 12h6"/>',
   fleet:'<path d="M2 16V8h12v8 M14 11h4l3 3v2h-7 M6 18a2 2 0 1 0 0 .1 M17 18a2 2 0 1 0 0 .1 M5 5h7"/>',
   customers:'<path d="M12 21s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11z M12 10a2 2 0 1 0 0 .1"/>',
+  stats:'<path d="M3 3v18h18 M7 15l4-4 3 3 5-6"/>',
   finance:'<path d="M4 20V10 M10 20V4 M16 20v-7 M22 20H2"/>',
   settings:'<path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z M12 2v3 M12 19v3 M2 12h3 M19 12h3 M4.9 4.9l2.1 2.1 M17 17l2.1 2.1 M4.9 19.1L7 17 M17 7l2.1-2.1"/>'};
 const icon = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]||""}</svg>`;
@@ -241,7 +242,7 @@ R.home = () => {
     <div><h2>Trips today and on the road</h2>${tripCards(trips.filter(t => t.date===todayISO() || tStatus(t)[0]==="On the road").slice(0,4), true) || `<div class="empty">No trips today. <a href="#trips">See all trips</a></div>`}</div>
   </div>
   <section class="sec"><h2>Modules</h2><div class="tiles">
-    ${[["orders","Orders","Every car by VIN or plate, from release to invoice"],["trips","Trips","Group cars on a truck, set stops and driver"],["planner","Load planner","Which car goes where on the truck"],["handover","Handover","Photos, damage and signature at pickup and delivery"],["ecmr","eCMR","Consignment notes made from the handovers"],["invoices","Invoices","Bill delivered cars with proof attached"],["finance","Finance","Per-km prices, fuel surcharge, costs and margin"],["fleet","Fleet & drivers","Trucks, trailers, documents and expiry dates"],["customers","Customers & places","Customers, prices, compounds and dealers"],["settings","Settings","Company details, backup and demo data"]]
+    ${[["orders","Orders","Every car by VIN or plate, from release to invoice"],["trips","Trips","Group cars on a truck, set stops and driver"],["planner","Load planner","Which car goes where on the truck"],["handover","Handover","Photos, damage and signature at pickup and delivery"],["ecmr","eCMR","Consignment notes made from the handovers"],["invoices","Invoices","Bill delivered cars with proof attached"],["finance","Finance","Per-km prices, fuel surcharge, costs and margin"],["stats","Statistics","Week, month or year overview, as a PDF report"],["fleet","Fleet & drivers","Trucks, trailers, documents and expiry dates"],["customers","Customers & places","Customers, prices, compounds and dealers"],["settings","Settings","Company details, backup and demo data"]]
       .map(t => `<a class="tile" href="#${t[0]}">${icon(t[0])}<div><b>${t[1]}</b><span>${t[2]}</span></div></a>`).join("")}
   </div></section>`;
 };
@@ -1453,6 +1454,174 @@ function distInfo(a, b){
   return {km:e.km, est:true, text:`expected: ${e.crow} km straight line (${pa.how} → ${pb.how}) × ${roadFactor()} road factor`};
 }
 
+/* ================= statistics: one period at a time (week, month or year), with a PDF report ================= */
+const statSt = {g:"month", anchor:todayISO()};
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const isoD = d => d.toISOString().slice(0,10);
+const dObj = iso => new Date(iso+"T12:00:00");
+function isoWeek(iso){ const d = dObj(iso); const day = (d.getDay()+6)%7; d.setDate(d.getDate()-day+3); const y = d.getFullYear(), j = new Date(y,0,4,12); return {y, w:1+Math.round(((d-j)/864e5 - 3 + ((j.getDay()+6)%7))/7)}; }
+function periodOf(g, anchor){
+  const a = dObj(anchor);
+  if(g==="week"){ const s = new Date(a); s.setDate(a.getDate()-((a.getDay()+6)%7)); const e = new Date(s); e.setDate(s.getDate()+6); const wk = isoWeek(isoD(s));
+    return {g, start:isoD(s), end:isoD(e), label:`Week ${wk.w}, ${wk.y}`, sub:`${fDate(isoD(s))} – ${fDate(isoD(e))} ${e.getFullYear()}`}; }
+  if(g==="year"){ const y = a.getFullYear(); return {g, start:`${y}-01-01`, end:`${y}-12-31`, label:String(y), sub:"January – December"}; }
+  const y = a.getFullYear(), m = a.getMonth(), e = new Date(y, m+1, 0, 12);
+  return {g, start:isoD(new Date(y,m,1,12)), end:isoD(e), label:`${MONTHS[m]} ${y}`, sub:`1 – ${e.getDate()} ${MONTHS[m]}`};
+}
+function shiftAnchor(g, anchor, n){ const d = dObj(anchor); if(g==="week") d.setDate(d.getDate()+7*n); else if(g==="year") d.setFullYear(d.getFullYear()+n); else { d.setDate(1); d.setMonth(d.getMonth()+n); } return isoD(d); }
+function buckets(P){ // the bars inside the period: days of a week, weeks of a month, months of a year
+  const out = [];
+  if(P.g==="week"){ for(let i=0;i<7;i++){ const s = isoD(new Date(dObj(P.start).getTime()+i*864e5)); out.push({start:s, end:s, label:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][i]}); } }
+  else if(P.g==="year"){ const y = +P.start.slice(0,4); for(let m=0;m<12;m++) out.push({start:isoD(new Date(y,m,1,12)), end:isoD(new Date(y,m+1,0,12)), label:MONTHS[m].slice(0,3)}); }
+  else { let s = P.start; while(s<=P.end){ const d = dObj(s), e = new Date(d); e.setDate(d.getDate()+(6-((d.getDay()+6)%7))); const en = isoD(e) > P.end ? P.end : isoD(e); out.push({start:s, end:en, label:"Wk "+isoWeek(s).w}); s = isoD(new Date(dObj(en).getTime()+864e5)); } }
+  return out;
+}
+const dayOf = t => t ? (typeof t==="number" ? isoD(new Date(t)) : String(t).slice(0,10)) : "";
+const inP = (iso, P) => !!iso && iso>=P.start && iso<=P.end;
+function statsFor(P){
+  const trips = list("trips").filter(t => inP(t.date, P) && tripOrders(t).length), ms = trips.map(t => [t, tripMoney(t)]);
+  const withKm = ms.filter(x => x[1].cost.km);
+  const rev = sum(ms, x=>x[1].rev), base = sum(ms, x=>x[1].base), fuel = sum(ms, x=>x[1].fuel), cost = sum(withKm, x=>x[1].cost.total), km = sum(ms, x=>x[1].cost.km);
+  const carsTrips = sum(ms, x=>x[1].os.length);
+  const costParts = {}; withKm.forEach(([,m]) => m.cost.parts.forEach(p => costParts[p[0]] = (costParts[p[0]]||0)+p[1]));
+  const os = list("orders"), del = os.filter(o => inP(dayOf(o.deliveredAt), P)), picked = os.filter(o => inP(dayOf(o.loadedAt), P));
+  const onTime = del.filter(o => !o.due || dayOf(o.deliveredAt) <= o.due).length;
+  const newDmg = del.filter(o => (o.dmgDelivery||[]).some(d => !(o.dmgPickup||[]).some(b => b.zone===d.zone && b.type===d.type))).length;
+  const hos = list("handovers").filter(h => inP(dayOf(h.at), P));
+  const invs = list("invoices"), invd = invs.filter(i => inP(i.date, P)), paid = invs.filter(i => inP(i.paidAt, P));
+  const open = invs.filter(i => i.sentAt && !i.paidAt), over = open.filter(i => invState(i)[0]==="Overdue");
+  // revenue and cost per customer / lane / truck / driver (trip cost shared over its cars by revenue)
+  const group = keyFn => { const g = {}; withKm.forEach(([t,m]) => m.os.forEach(o => { const r = (+o.price||0)+surchargeOf(o), share = m.rev ? r/m.rev : 1/m.os.length, k = keyFn(o,t);
+      const x = g[k] = g[k]||{rev:0,cost:0,cars:0}; x.rev += r; x.cost += m.cost.total*share; x.cars++; }));
+    ms.filter(x => !x[1].cost.km).forEach(([t,m]) => m.os.forEach(o => { const k = keyFn(o,t), x = g[k] = g[k]||{rev:0,cost:0,cars:0}; x.rev += (+o.price||0)+surchargeOf(o); x.cars++; x.noKm = true; }));
+    return Object.entries(g).map(([key,x]) => Object.assign({key, margin:x.rev-x.cost}, x)).sort((a,b)=>b.rev-a.rev); };
+  const bk = buckets(P).map(b => { const tm = ms.filter(x => x[0].date>=b.start && x[0].date<=b.end); return Object.assign({rev:sum(tm,x=>x[1].rev), cost:sum(tm.filter(x=>x[1].cost.km),x=>x[1].cost.total), trips:tm.length}, b); });
+  return {P, trips:ms.length, noKm:ms.length-withKm.length, rev, base, fuel, cost, margin:rev-cost, pct: rev ? (rev-cost)/rev*100 : 0, km, carsTrips,
+    revKm: km ? rev/km : 0, costKm: km ? cost/km : 0, perCar: carsTrips ? rev/carsTrips : 0, costParts,
+    delivered:del.length, picked:picked.length, onTime, onTimePct: del.length ? onTime/del.length*100 : null, newDmg, handovers:hos.length, unattended:hos.filter(h=>h.unattended).length,
+    invoiced:sum(invd,i=>invTotal(i).total), invCount:invd.length, paid:sum(paid,i=>invTotal(i).total), open:sum(open,i=>invTotal(i).total), over:sum(over,i=>invTotal(i).total), overCount:over.length,
+    byCust:group(o=>custName(o.customer)), byLane:group(o=>locName(o.from)+" → "+locName(o.to)), byTruck:group((o,t)=>truckName(t.truck)), byDriver:group((o,t)=>drvName(t.driver)), bk};
+}
+function delta(cur, prev, invert){ if(prev==null || !isFinite(prev) || prev===0) return cur ? `<span class="hint">new</span>` : `<span class="hint">–</span>`;
+  const d = (cur-prev)/Math.abs(prev)*100, good = invert ? d<0 : d>0; if(Math.abs(d)<0.5) return `<span class="hint">same as before</span>`;
+  return `<span style="color:${good?"var(--em-deep)":"var(--bad)"};font-weight:700">${d>0?"▲":"▼"} ${Math.abs(d).toFixed(0)}%</span> <span class="hint">vs ${statSt.g==="week"?"last week":statSt.g==="year"?"last year":"last month"}</span>`; }
+const round0 = n => money(Math.round(n)).replace(/\.00$/,"");
+R.stats = () => {
+  const P = periodOf(statSt.g, statSt.anchor), S0 = statsFor(P), S1 = statsFor(periodOf(statSt.g, shiftAnchor(statSt.g, statSt.anchor, -1)));
+  const kpi = (label, val, d, sub) => `<div class="card"><span class="hint">${label}</span><div style="font-size:clamp(22px,2.6vw,30px);font-weight:800;line-height:1.15;font-variant-numeric:tabular-nums;white-space:nowrap">${val}</div><div style="font-size:13px">${d}</div>${sub?`<div class="hint">${sub}</div>`:""}</div>`;
+  const cp = Object.entries(S0.costParts).sort((a,b)=>b[1]-a[1]), cmax = Math.max(1, ...cp.map(x=>x[1]));
+  const tbl = (title, rows, label) => `<div><h3 style="margin-bottom:8px">${title}</h3>${rows.length ? `<div class="tw"><table class="stack"><thead><tr><th>${label}</th><th class="num">Cars</th><th class="num">Revenue</th><th class="num">Margin</th><th class="num">%</th></tr></thead><tbody>
+    ${rows.slice(0,8).map(r=>`<tr><td>${esc(r.key)}</td><td class="num">${r.cars}</td><td class="num">${money(r.rev)}</td><td class="num">${r.noKm&&!r.cost?"–":`<span style="color:${r.margin<0?"var(--bad)":"inherit"}">${money(r.margin)}</span>`}</td><td class="num">${r.rev&&!(r.noKm&&!r.cost)?(r.margin/r.rev*100).toFixed(0)+"%":"–"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">Nothing in this period.</div>`}</div>`;
+  const empty = !S0.trips && !S0.delivered && !S0.invCount && !S0.paid;
+  return `<div class="head"><div><h1>Statistics</h1><p>Everything in one period: money, cars, trips, invoices. Revenue and costs count on the trip's date.</p></div>
+    <button class="btn pri" id="stpdf">Download PDF report</button></div>
+  <div class="tools" style="justify-content:space-between">
+    <div class="chips">${[["week","Week"],["month","Month"],["year","Year"]].map(x=>`<button class="fchip ${statSt.g===x[0]?"on":""}" data-sg="${x[0]}">${x[1]}</button>`).join("")}</div>
+    <div style="display:flex;align-items:center;gap:8px"><button class="btn sm" data-sn="-1" aria-label="Previous period">←</button><div style="text-align:center;min-width:170px"><b style="font-size:18px">${esc(P.label)}</b><div class="hint">${esc(P.sub)}</div></div><button class="btn sm" data-sn="1" aria-label="Next period">→</button>
+      ${statSt.anchor!==todayISO()?`<button class="btn sm" data-sn="0">Now</button>`:""}</div>
+  </div>
+  ${empty ? `<div class="note">No trips, deliveries or invoices in ${esc(P.label)}. Use ← to look at an earlier period.</div>` : ""}
+  <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:6px">
+    ${kpi("Revenue", round0(S0.rev), delta(S0.rev,S1.rev), S0.fuel?`incl. ${round0(S0.fuel)} fuel surcharge`:"")}
+    ${kpi("Costs", round0(S0.cost), delta(S0.cost,S1.cost,true), S0.noKm?`${S0.noKm} trip${S0.noKm>1?"s":""} without km not counted`:"")}
+    ${kpi("Margin", `<span style="color:${S0.margin<0?"var(--bad)":"inherit"}">${round0(S0.margin)}</span>`, delta(S0.margin,S1.margin), S0.rev?`${S0.pct.toFixed(1)}% of revenue`:"")}
+    ${kpi("Cars delivered", S0.delivered, delta(S0.delivered,S1.delivered), `${S0.picked} picked up`)}
+    ${kpi("Trips", S0.trips, delta(S0.trips,S1.trips), S0.trips?`${(S0.carsTrips/S0.trips).toFixed(1)} cars per trip`:"")}
+    ${kpi("Km driven", S0.km.toLocaleString("en-GB"), delta(S0.km,S1.km), S0.km?`${money(S0.revKm)} revenue · ${money(S0.costKm)} cost per km`:"")}
+    ${kpi("Average price per car", S0.carsTrips?money(S0.perCar):"–", delta(S0.perCar,S1.perCar), "")}
+    ${kpi("On time", S0.onTimePct==null?"–":S0.onTimePct.toFixed(0)+"%", "", S0.delivered?`${S0.onTime} of ${S0.delivered} by their due date`:"")}
+  </div>
+  <section class="card sec"><div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap"><h2>Revenue and costs by ${P.g==="week"?"day":P.g==="month"?"week":"month"}</h2>
+    <div class="hint" style="display:flex;gap:14px"><span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--c1);margin-right:5px"></i>Revenue</span><span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--c2);margin-right:5px"></i>Costs</span></div></div>
+    <div class="fig" id="stfig" style="min-height:260px;margin-top:10px"><svg id="stsvg" role="img" aria-label="Revenue and costs per ${P.g==="week"?"day":P.g==="month"?"week":"month"}"></svg><div id="sttip" class="sttip" hidden></div></div>
+    <details style="margin-top:8px"><summary class="hint" style="cursor:pointer">Show as a table</summary><div class="tw" style="margin-top:8px"><table><thead><tr><th>${P.g==="week"?"Day":P.g==="month"?"Week":"Month"}</th><th class="num">Trips</th><th class="num">Revenue</th><th class="num">Costs</th><th class="num">Margin</th></tr></thead><tbody>${S0.bk.map(b=>`<tr><td>${b.label} <span class="hint">${fDate(b.start)}${b.end!==b.start?" – "+fDate(b.end):""}</span></td><td class="num">${b.trips}</td><td class="num">${money(b.rev)}</td><td class="num">${money(b.cost)}</td><td class="num">${money(b.rev-b.cost)}</td></tr>`).join("")}</tbody></table></div></details>
+  </section>
+  <div class="two sec">
+    <section class="card"><h2 style="margin-bottom:10px">Where the costs go</h2>
+      ${cp.length ? cp.map(([k,v]) => `<div style="display:grid;grid-template-columns:150px minmax(0,1fr) 90px;gap:10px;align-items:center;margin:6px 0"><span>${esc(k)}</span><div style="height:12px;background:var(--soft);border-radius:4px"><div style="height:12px;width:${Math.max(2,v/cmax*100)}%;background:var(--c2);border-radius:0 4px 4px 0"></div></div><span class="num">${money(v)} <span class="hint">${(v/S0.cost*100).toFixed(0)}%</span></span></div>`).join("") : `<div class="empty">No trip costs in this period.</div>`}
+    </section>
+    <section class="card"><h2 style="margin-bottom:10px">Operations and cash</h2>
+      <table><tbody>
+        <tr><td>Cars picked up / delivered</td><td class="num">${S0.picked} / ${S0.delivered}</td></tr>
+        <tr><td>Handovers (of which unattended)</td><td class="num">${S0.handovers} (${S0.unattended})</td></tr>
+        <tr><td>Cars with new damage at delivery</td><td class="num">${S0.newDmg?`<span class="st bad">${S0.newDmg}</span>`:"0"}</td></tr>
+        <tr><td>Invoiced in this period</td><td class="num">${money(S0.invoiced)} <span class="hint">${S0.invCount} invoice${S0.invCount===1?"":"s"}</span></td></tr>
+        <tr><td>Paid in this period</td><td class="num">${money(S0.paid)}</td></tr>
+        <tr><td>Unpaid now</td><td class="num">${money(S0.open)}</td></tr>
+        <tr><td>Overdue now</td><td class="num">${S0.over?`<span class="st bad">${money(S0.over)}</span>`:money(0)}</td></tr>
+      </tbody></table></section>
+  </div>
+  <div class="two sec">${tbl("Customers", S0.byCust, "Customer")}${tbl("Lanes", S0.byLane, "Lane")}</div>
+  <div class="two sec">${tbl("Trucks", S0.byTruck, "Truck")}${tbl("Drivers", S0.byDriver, "Driver")}</div>
+  <p class="hint">Trip costs come from your cost model in Finance; each trip's cost is shared over its cars by their share of the revenue.</p>`;
+};
+R.after_stats = () => {
+  const m = $("main");
+  m.querySelectorAll("[data-sg]").forEach(b => b.onclick = () => { statSt.g = b.dataset.sg; refresh(); });
+  m.querySelectorAll("[data-sn]").forEach(b => b.onclick = () => { const n = +b.dataset.sn; statSt.anchor = n ? shiftAnchor(statSt.g, statSt.anchor, n) : todayISO(); refresh(); });
+  $("stpdf").onclick = () => statsPdf(statsFor(periodOf(statSt.g, statSt.anchor)), statsFor(periodOf(statSt.g, shiftAnchor(statSt.g, statSt.anchor, -1))));
+  // grouped bars, real pixel size, hover tooltip per bucket
+  const svg = $("stsvg"), tip = $("sttip"), S0 = statsFor(periodOf(statSt.g, statSt.anchor)), bk = S0.bk;
+  const draw = () => {
+    const W = svg.clientWidth, H = svg.clientHeight; if(!W || !H) return;
+    const small = W < 520, padL = small ? 44 : 64, padB = 26, padT = 10, iw = W-padL-8, ih = H-padB-padT;
+    const max = Math.max(1, ...bk.map(b => Math.max(b.rev, b.cost))), step = niceStep(max/4), top = Math.ceil(max/step)*step;
+    const y = v => padT + ih - v/top*ih, bw = iw/bk.length, gw = Math.min(26, (bw-8)/2);
+    let g = "";
+    for(let v=0; v<=top+1e-9; v+=step) g += `<line x1="${padL}" x2="${W-8}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-width="1"/><text x="${padL-6}" y="${y(v)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${small ? (v>=1000?(v/1000).toFixed(v%1000?1:0)+"k":v) : money(v).replace(/\.00$/,"")}</text>`;
+    bk.forEach((b,i) => { const cx = padL + bw*i + bw/2;
+      const bar = (v, x, c) => v>0 ? `<path d="M${x},${y(0)} V${y(v)+Math.min(4, y(0)-y(v))} q0,-4 4,-4 h${gw-8} q4,0 4,4 V${y(0)} Z" fill="${c}"/>` : "";
+      g += bar(b.rev, cx-gw-1, "var(--c1)") + bar(b.cost, cx+1, "var(--c2)");
+      if(!small || i%2===0) g += `<text x="${cx}" y="${H-8}" text-anchor="middle" font-size="11" fill="var(--muted)">${b.label}</text>`;
+      g += `<rect x="${padL+bw*i}" y="${padT}" width="${bw}" height="${ih}" fill="transparent" data-bi="${i}"/>`; });
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.innerHTML = g;
+    svg.querySelectorAll("[data-bi]").forEach(r => { r.onmouseenter = r.onfocus = e => { const b = bk[+r.dataset.bi];
+      tip.innerHTML = `<b>${b.label}</b> <span class="hint">${fDate(b.start)}${b.end!==b.start?" – "+fDate(b.end):""}</span><br>Revenue ${money(b.rev)}<br>Costs ${money(b.cost)}<br>Margin <b>${money(b.rev-b.cost)}</b> · ${b.trips} trip${b.trips===1?"":"s"}`;
+      tip.hidden = false; const x = padL + bw*(+r.dataset.bi) + bw/2; tip.style.left = Math.min(W-170, Math.max(0, x-80))+"px"; tip.style.top = "0px"; r.setAttribute("fill","rgba(127,127,127,.08)"); };
+      r.onmouseleave = () => { tip.hidden = true; r.setAttribute("fill","transparent"); }; });
+  };
+  if(window.__stRO) window.__stRO.disconnect(); window.__stRO = new ResizeObserver(draw); window.__stRO.observe(svg); draw();
+};
+function niceStep(x){ if(x<=0) return 1; const p = Math.pow(10, Math.floor(Math.log10(x))), f = x/p; return (f<=1?1:f<=2?2:f<=5?5:10)*p; }
+function statsPdf(S0, S1){
+  const d = Doc(), co = S().company, M = d.M, P = S0.P;
+  d.text((co.name||"Your company")+" · Statistics", {size:9, rgb:"0.35 0.35 0.35"});
+  d.text(P.label, {size:20, bold:true}); d.text(P.sub+" · made "+fDT(Date.now()), {size:9, rgb:"0.35 0.35 0.35"}); d.gap(8);
+  const pct = (a,b) => b ? ((a-b)/Math.abs(b)*100>=0?"+":"")+((a-b)/Math.abs(b)*100).toFixed(0)+"% vs previous" : "";
+  const tiles = [["Revenue", round0(S0.rev), pct(S0.rev,S1.rev)], ["Costs", round0(S0.cost), pct(S0.cost,S1.cost)], ["Margin", round0(S0.margin)+(S0.rev?" ("+S0.pct.toFixed(1)+"%)":""), pct(S0.margin,S1.margin)],
+    ["Cars delivered", String(S0.delivered), pct(S0.delivered,S1.delivered)], ["Trips", String(S0.trips), S0.trips?(S0.carsTrips/S0.trips).toFixed(1)+" cars per trip":""], ["Km driven", S0.km.toLocaleString("en-GB"), S0.km?money(S0.revKm)+" rev. / "+money(S0.costKm)+" cost per km":""],
+    ["Average price per car", S0.carsTrips?money(S0.perCar):"-", ""], ["On time", S0.onTimePct==null?"-":S0.onTimePct.toFixed(0)+"%", S0.delivered?S0.onTime+" of "+S0.delivered:""]];
+  const tw = (d.Wd-18)/4, th = 52;
+  for(let r=0;r<2;r++){ d.need(th+6); const y0 = d.y; tiles.slice(r*4, r*4+4).forEach((t,i) => { const x = M + i*(tw+6);
+    d.add({t:"rect", x, y:y0, w:tw, h:th, fill:"0.96 0.97 0.965", stroke:"0.88 0.9 0.89"}); d.add({t:"text", x:x+8, y:y0+13, s:t[0], size:8, rgb:"0.4 0.4 0.4"});
+    d.add({t:"text", x:x+8, y:y0+31, s:t[1], size:14, bold:true}); d.add({t:"text", x:x+8, y:y0+45, s:t[2], size:7.5, rgb:"0.35 0.35 0.35"}); }); d.y = y0 + th + 6; }
+  // chart
+  d.gap(8); d.text(`Revenue and costs by ${P.g==="week"?"day":P.g==="month"?"week":"month"}`, {size:11, bold:true});
+  const ch = 150, cy = d.y+4; d.need(ch+30); const bk = S0.bk, max = Math.max(1, ...bk.map(b=>Math.max(b.rev,b.cost))), step = niceStep(max/4), top = Math.ceil(max/step)*step;
+  const padL = 52, iw = d.Wd-padL, y = v => cy + ch - v/top*ch, bw = iw/bk.length, gw = Math.min(16, (bw-6)/2);
+  for(let v=0; v<=top+1e-9; v+=step){ d.add({t:"line", x1:M+padL, y1:y(v), x2:M+d.Wd, y2:y(v)}); d.add({t:"text", x:M, y:y(v)+3, s:money(v).replace(/\.00$/,""), size:7, rgb:"0.4 0.4 0.4"}); }
+  bk.forEach((b,i) => { const cx = M+padL+bw*i+bw/2;
+    if(b.rev>0) d.add({t:"rect", x:cx-gw-1, y:y(b.rev), w:gw, h:y(0)-y(b.rev), fill:"0.106 0.686 0.478", stroke:"0.106 0.686 0.478"});
+    if(b.cost>0) d.add({t:"rect", x:cx+1, y:y(b.cost), w:gw, h:y(0)-y(b.cost), fill:"0.384 0.314 0.839", stroke:"0.384 0.314 0.839"});
+    d.add({t:"text", x:cx-b.label.length*2.2, y:cy+ch+12, s:b.label, size:7.5, rgb:"0.35 0.35 0.35"}); });
+  d.y = cy+ch+30;
+  d.add({t:"rect", x:M+padL, y:d.y-7, w:8, h:8, fill:"0.106 0.686 0.478", stroke:"0.106 0.686 0.478"}); d.add({t:"text", x:M+padL+12, y:d.y, s:"Revenue", size:8});
+  d.add({t:"rect", x:M+padL+70, y:d.y-7, w:8, h:8, fill:"0.384 0.314 0.839", stroke:"0.384 0.314 0.839"}); d.add({t:"text", x:M+padL+82, y:d.y, s:"Costs", size:8}); d.gap(10);
+  d.table([[P.g==="week"?"Day":P.g==="month"?"Week":"Month",120],["Trips",60,"r"],["Revenue",107,"r"],["Costs",107,"r"],["Margin",105,"r"]], S0.bk.map(b => [b.label+" ("+fDate(b.start)+(b.end!==b.start?" - "+fDate(b.end):"")+")", String(b.trips), money(b.rev), money(b.cost), money(b.rev-b.cost)]));
+  // costs, operations, cash
+  d.gap(12); d.text("Where the costs go", {size:11, bold:true});
+  const cp = Object.entries(S0.costParts).sort((a,b)=>b[1]-a[1]);
+  if(cp.length) d.table([["Cost",250],["Amount",150,"r"],["Share",99,"r"]], cp.map(([k,v]) => [k, money(v), (v/S0.cost*100).toFixed(0)+"%"])); else d.text("No trip costs in this period.", {size:9});
+  d.gap(12); d.text("Operations and cash", {size:11, bold:true});
+  d.table([["Item",350],["Value",149,"r"]], [["Cars picked up / delivered", S0.picked+" / "+S0.delivered], ["Handovers (of which unattended)", S0.handovers+" ("+S0.unattended+")"], ["Cars with new damage at delivery", String(S0.newDmg)],
+    ["Invoiced in this period", money(S0.invoiced)+" ("+S0.invCount+")"], ["Paid in this period", money(S0.paid)], ["Unpaid now", money(S0.open)], ["Overdue now", money(S0.over)]]);
+  const grp = (title, rows, label) => { d.gap(12); d.text(title, {size:11, bold:true}); if(!rows.length){ d.text("Nothing in this period.", {size:9}); return; }
+    d.table([[label,220],["Cars",45,"r"],["Revenue",85,"r"],["Margin",85,"r"],["%",64,"r"]], rows.slice(0,12).map(r => [r.key, String(r.cars), money(r.rev), r.noKm&&!r.cost?"-":money(r.margin), r.rev&&!(r.noKm&&!r.cost)?(r.margin/r.rev*100).toFixed(0)+"%":"-"])); };
+  grp("Customers", S0.byCust, "Customer"); grp("Lanes", S0.byLane, "Lane"); grp("Trucks", S0.byTruck, "Truck"); grp("Drivers", S0.byDriver, "Driver");
+  d.gap(10); d.text("Revenue and costs count on the trip date. Costs come from the cost model in Finance; each trip's cost is shared over its cars by revenue. Trips without km have no costs.", {size:7.5, rgb:"0.4 0.4 0.4"});
+  saveFile(d.blob(), fileName("Statistics "+P.label)+".pdf");
+}
+
 /* ================= PDF (plain text + JPEG images, no library) ================= */
 const W1252 = {"€":128,"‚":130,"„":132,"…":133,"‘":145,"’":146,"“":147,"”":148,"•":149,"–":150,"—":151,"™":153};
 function pdfStr(s){ let o = ""; for(const ch of String(s??"").replace(/→/g,"->").replace(/[✓✔]/g,"OK").replace(/≥/g,">=").replace(/×/g,"x")){ const c = ch.charCodeAt(0); const b = W1252[ch] || (c<256 ? c : 63); const x = String.fromCharCode(b); o += (x==="\\"||x==="("||x===")") ? "\\"+x : x; } return o; }
@@ -1503,6 +1672,7 @@ function Doc(){ const pages = [{items:[]}]; let y = 50; const M = 48, Wd = 595-2
         if(fill) p.push({t:"rect",x:M,y,w:Wd,h,fill:"0.94 0.95 0.94",stroke:"0.94 0.95 0.94"});
         lines.forEach((ls,i) => { const right = cols[i][2]==="r"; ls.forEach((l,k) => p.push({t:"text", x: right ? x+ws[i]-6-l.length*4.6 : x+4, y:y+12+k*12, s:l, size:9, bold})); x += ws[i]; }); y += h; p.push({t:"line",x1:M,y1:y,x2:595-M,y2:y}); };
       row(cols.map(c=>c[0]), true, true); rows.forEach(r => row(r)); },
+    add(it){ pages[pages.length-1].items.push(it); },
     blob(){ return makePdf(pages); }, M, Wd };
   return d; }
 function saveFile(blob, name){
