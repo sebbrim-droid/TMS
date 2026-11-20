@@ -462,12 +462,12 @@ R.fleet = () => {
   const ts = list("trucks").sort((a,b)=>a.plate.localeCompare(b.plate)), ds = list("drivers").sort((a,b)=>a.name.localeCompare(b.name));
   return `<div class="head"><div><h1>Fleet & drivers</h1><p>The truck type decides which load-planner layout a trip uses.</p></div></div>
   <section><div class="tools"><h2 style="margin-right:auto">Trucks</h2><button class="btn pri" data-act="nt">+ Truck</button></div>
-  ${ts.length ? `<div class="tw"><table class="stack"><thead><tr><th>Truck</th><th>Trailer</th><th>Build</th><th>Load planner layout</th><th>Inspection due</th><th class="num">Cargo insurance</th></tr></thead><tbody>
-  ${ts.map(t=>`<tr class="click" data-t="${t.id}"><td><b>${esc(t.plate)}</b></td><td>${esc(t.trailer||"")}</td><td>${esc([t.builder,t.model,t.cab?t.cab+" cab":""].filter(Boolean).join(" · "))}</td><td>${esc((PROFILES.find(p=>p[0]===t.profile)||[,"Eurolohr 200 low cab (closest available)"])[1])}</td><td>${expiry(t.inspection)}</td><td class="num">${t.insurance?money(t.insurance):""}</td></tr>`).join("")}
+  ${ts.length ? `<div class="tw"><table class="stack"><thead><tr><th>Truck</th><th>Trailer</th><th>Driver</th><th>Build</th><th>Load planner layout</th><th>Inspection due</th><th class="num">Cargo insurance</th></tr></thead><tbody>
+  ${ts.map(t=>`<tr class="click" data-t="${t.id}"><td><b>${esc(t.plate)}</b></td><td>${esc(t.trailer||"")}</td><td>${t.driver&&get("drivers",t.driver)?esc(drvName(t.driver)):'<span class="hint">none</span>'}</td><td>${esc([t.builder,t.model,t.cab?t.cab+" cab":""].filter(Boolean).join(" · "))}</td><td>${esc((PROFILES.find(p=>p[0]===t.profile)||[,"Eurolohr 200 low cab (closest available)"])[1])}</td><td>${expiry(t.inspection)}</td><td class="num">${t.insurance?money(t.insurance):""}</td></tr>`).join("")}
   </tbody></table></div>` : `<div class="empty">No trucks yet.</div>`}</section>
   <section class="sec"><div class="tools"><h2 style="margin-right:auto">Drivers</h2><button class="btn pri" data-act="nd">+ Driver</button></div>
-  ${ds.length ? `<div class="tw"><table class="stack"><thead><tr><th>Name</th><th>Phone</th><th>Languages</th><th>Driving licence</th><th>Tachograph card</th><th>CPC</th></tr></thead><tbody>
-  ${ds.map(d=>`<tr class="click" data-d="${d.id}"><td><b>${esc(d.name)}</b></td><td>${esc(d.phone||"")}</td><td>${esc(d.langs||"")}</td><td>${expiry(d.licence)}</td><td>${expiry(d.tacho)}</td><td>${expiry(d.cpc)}</td></tr>`).join("")}
+  ${ds.length ? `<div class="tw"><table class="stack"><thead><tr><th>Name</th><th>Truck</th><th>Phone</th><th>Languages</th><th>Driving licence</th><th>Tachograph card</th><th>CPC</th></tr></thead><tbody>
+  ${ds.map(d=>`<tr class="click" data-d="${d.id}"><td><b>${esc(d.name)}</b></td><td>${(()=>{ const t = truckOf(d.id); return t ? esc(t.plate) : '<span class="hint">none</span>'; })()}</td><td>${esc(d.phone||"")}</td><td>${esc(d.langs||"")}</td><td>${expiry(d.licence)}</td><td>${expiry(d.tacho)}</td><td>${expiry(d.cpc)}</td></tr>`).join("")}
   </tbody></table></div>` : `<div class="empty">No drivers yet.</div>`}</section>`;
 };
 R.after_fleet = () => {
@@ -480,10 +480,16 @@ R.after_fleet = () => {
 function truckForm(id){ simpleForm(id?"Truck":"New truck","trucks",id, t => `
   ${fld("Truck plate","plate",t.plate)}${fld("Trailer plate","trailer",t.trailer)}
   ${sel("Builder","builder",["Lohr","Kässbohrer","Rolfo","Other"].map(x=>[x,x]),t.builder||"Lohr")}${fld("Model","model",t.model,"text",'placeholder="e.g. Eurolohr 200"')}
+  ${sel("Driver on this truck","driver",[["","No fixed driver"]].concat(list("drivers").sort((a,b)=>a.name.localeCompare(b.name)).map(d=>{ const o = truckOf(d.id); return [d.id, d.name+(o && o.id!==t.id?" (now on "+o.plate+")":"")]; })),t.driver||"")}
+  <p class="hint" style="align-self:end;margin:0 0 10px">New trips with this truck get this driver. You can still change it per trip.</p>
   ${sel("Cab","cab",[["low","Low cab"],["high","High cab"]],t.cab||"low")}${sel("Load planner layout","profile",PROFILES,t.profile||"eurolohr200-low")}
   <p class="hint span2">The planner has Lohr Eurolohr 200 layouts so far. For a Kässbohrer or Rolfo, the closest Lohr layout is used until its own is added.</p>
   ${fld("Next inspection","inspection",t.inspection,"date")}${fld("Cargo insurance limit ("+(S().currency||"EUR")+")","insurance",t.insurance,"number",'step="1000" min="0"')}
-  ${fld("Fuel use L/100 km (empty = default in Finance)","lPer100",t.lPer100||"","number",'step="0.5" min="0"')}${fld("Fixed costs per month (empty = default)","fixedMonth",t.fixedMonth||"","number",'step="50" min="0"')}`, {builder:"Lohr",model:"Eurolohr 200",cab:"low",profile:"eurolohr200-low"}); }
+  ${fld("Fuel use L/100 km (empty = default in Finance)","lPer100",t.lPer100||"","number",'step="0.5" min="0"')}${fld("Fixed costs per month (empty = default)","fixedMonth",t.fixedMonth||"","number",'step="50" min="0"')}`, {builder:"Lohr",model:"Eurolohr 200",cab:"low",profile:"eurolohr200-low"}, saved => {
+    if(!saved.driver) return; // a driver drives one truck: take them off any other truck
+    list("trucks").filter(x => x.id!==saved.id && x.driver===saved.driver).forEach(x => { x.driver = ""; put("trucks", x, true); toast(drvName(saved.driver)+" moved from "+x.plate+" to "+saved.plate); });
+    refresh(); }); }
+function truckOf(driverId){ return driverId ? list("trucks").find(t => t.driver===driverId) : null; }
 function driverForm(id){ simpleForm(id?"Driver":"New driver","drivers",id, d => `
   ${fld("Name","name",d.name)}${fld("Phone","phone",d.phone,"tel")}
   ${fld("Languages","langs",d.langs,"text",'placeholder="e.g. PL, EN, DE"')}${fld("Driving licence (CE) expires","licence",d.licence,"date")}
@@ -517,7 +523,10 @@ R.after_trips = () => { bindTripCards(); $("main").querySelector('[data-act="new
 function newTrip(orderIds){
   const os = orderIds.map(id => get("orders",id)).filter(Boolean);
   const from = os[0] ? locName(os[0].from) : "", to = os.length ? locName(os[os.length-1].to) : "";
-  const truck = list("trucks")[0], drv = list("drivers")[0];
+  // a truck that is not already busy on an open trip, and the driver assigned to it
+  const busy = new Set(list("trips").filter(x => ["Planning","On the road"].includes(tStatus(x)[0]) && tripOrders(x).length).map(x => x.truck));
+  const truck = list("trucks").find(x => !busy.has(x.id)) || list("trucks")[0];
+  const drv = truck && truck.driver && get("drivers",truck.driver) ? get("drivers",truck.driver) : list("drivers").find(d => !truckOf(d.id)) || list("drivers")[0];
   const t = put("trips", {name: from && to ? `${from} → ${to}` : "Trip "+fDate(todayISO()), date: todayISO(), truck: truck?truck.id:"", driver: drv?drv.id:"", route:"base", orders: orderIds.slice(), stops:[], created: Date.now(), km:0}, true);
   os.forEach(o => { const old = o.trip && get("trips",o.trip); if(old && old.id!==t.id){ old.orders = old.orders.filter(x=>x!==o.id); put("trips",old,true); } o.trip = t.id; put("orders",o,true); });
   go("trip-"+t.id); toast("Trip created");
@@ -580,7 +589,7 @@ function tripForm(id){
   openModal("Edit trip", `<form id="tf" class="grid2">
     ${fld("Trip name","name",t.name)}${fld("Date","date",t.date,"date")}
     ${sel("Truck","truck",[["","No truck"]].concat(list("trucks").map(x=>[x.id,truckName(x.id)])),t.truck)}
-    ${sel("Driver","driver",[["","No driver"]].concat(list("drivers").map(x=>[x.id,x.name])),t.driver)}
+    ${sel("Driver (set from the truck)","driver",[["","No driver"]].concat(list("drivers").map(x=>[x.id,x.name+(truckOf(x.id)?" · "+truckOf(x.id).plate:"")])),t.driver)}
     ${sel("Route rules for the load planner","route",ROUTES,t.route||"base")}
     <label class="f">Distance incl. empty km (km)<input name="km" type="number" min="0" step="1" value="${esc(t.km||"")}"><span class="hint">${(()=>{ const r = tripRouteKm(t); return r.km!=null ? (r.est?"Expected":"Known")+" distances: "+r.km+" km loaded, add the way back" : r.missing.length ? "Missing distance: "+r.missing.map(p=>locName(p[0])+" → "+locName(p[1])).join(", ") : ""; })()}</span></label>
     ${fld("Days (empty = from km, 0.5 for half a day)","days",t.days||"","number",'min="0" step="0.5"')}
@@ -589,6 +598,8 @@ function tripForm(id){
     ${fld("What the other costs are","otherNote",t.otherNote,"text",'placeholder="e.g. ferry, parking, winch hire"')}
   </form>`, `${!tripOrders(t).some(o=>o.loadedAt)?`<button class="btn danger left" id="tdel">Delete trip</button>`:""}<button class="btn" data-close>Cancel</button><button class="btn pri" id="tsave">Save</button>`,
   root => {
+    const tf = root.querySelector("#tf");
+    tf.truck.onchange = () => { const tr = get("trucks", tf.truck.value); if(tr && tr.driver && get("drivers",tr.driver)){ tf.driver.value = tr.driver; toast(drvName(tr.driver)+" set as driver, from the truck"); } };
     $("tsave").onclick = () => { const v = formVals(root.querySelector("#tf")); Object.assign(t, v, {km:+v.km||0, days:+v.days||0, tolls:v.tolls===""?"":+v.tolls, otherCost:+v.otherCost||0}); delete t.cost; put("trips",t); closeModal(); toast("Trip saved"); };
     const d = $("tdel"); if(d) d.onclick = () => confirmBtn(d, "Sure? Tap again", () => { tripOrders(t).forEach(o => { delete o.trip; put("orders",o,true); }); del("trips",t.id,true); closeModal(); go("trips"); toast("Trip deleted, its cars are back in Orders"); });
   });
@@ -1673,6 +1684,7 @@ function loadDemo(){
   const t2 = put("trucks", {plate:"GB 789 FG", trailer:"XB 012 HI", builder:"Lohr", model:"Eurolohr 200", cab:"high", profile:"eurolohr200-high", inspection:addDays(T,18), insurance:500000}, true).id;
   const d1 = put("drivers", {name:"Marek Nowak", phone:"+48 600 000 000", langs:"PL, EN, DE", licence:addDays(T,900), tacho:addDays(T,400), cpc:addDays(T,700)}, true).id;
   const d2 = put("drivers", {name:"Andrei Popescu", phone:"+40 700 000 000", langs:"RO, IT, EN", licence:addDays(T,600), tacho:addDays(T,21), cpc:addDays(T,300)}, true).id;
+  [[t1,d1],[t2,d2]].forEach(([t,d]) => { const x = clone(get("trucks",t)); x.driver = d; put("trucks", x, true); });
   let n = 0; const vins = ["WVWZZZCDZMW","WVGZZZ5NZJW","WVWZZZAWZKU","WAUZZZGY0NA","TMBJJ7NX5MY","YV1LFA2BCH1","WBACV610X09","VF1RJA00X61","VF3UPHNSKL4","7SAYGDEE5PF","JTMW43FV40D","WP0ZZZ99ZNS","ZFA3120000J","WVWZZZCDZNW","YV1ZWA8UDL1","SJNFAAJ10U2"];
   const O = (model, cust, from, to, price, extra) => { const v = (vins[n%vins.length] + String(100000+n*7919).slice(-6)).slice(0,17); n++; return put("orders", Object.assign({vin:v, model, customer:cust, from, to, price, ready:addDays(T,-2), due:addDays(T,4), released:true, releasedAt:ago(2), created:ago(3)-n*1000, ref:"PO-"+(4100+n)}, extra||{}), true); };
   // trip 1: today, ready to plan (Zeebrugge -> Munich / Augsburg)
